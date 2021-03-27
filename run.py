@@ -10,7 +10,7 @@ from acoustic_feature_extractor.data.phoneme import JvsPhoneme
 from acoustic_feature_extractor.data.sampling_data import SamplingData
 from pandas import DataFrame
 from sklearn.metrics import accuracy_score, precision_score, recall_score
-from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier, export_graphviz
 
 mora_phoneme_list = ["a", "i", "u", "e", "o", "I", "U", "E", "N", "cl", "pau"]
 
@@ -18,7 +18,7 @@ mora_phoneme_list = ["a", "i", "u", "e", "o", "I", "U", "E", "N", "cl", "pau"]
 def f0_mean(f0: numpy.ndarray, rate: float, split_second_list: List[float]):
     indexes = numpy.floor(numpy.array(split_second_list) * rate).astype(int)
     output = numpy.array([numpy.nanmean(a) for a in numpy.split(f0, indexes)])
-    output[numpy.isnan(output)] = 0
+    output[numpy.isnan(output)] = -10
     return output
 
 
@@ -27,10 +27,10 @@ def voiced_ratio(f0: numpy.ndarray, rate: float, split_second_list: List[float])
     return numpy.array([numpy.mean(~numpy.isnan(a)) for a in numpy.split(f0, indexes)])
 
 
-def stride_array(array: numpy.ndarray, sampling_length: int):
+def stride_array(array: numpy.ndarray, sampling_length: int, padding_value: float):
     return numpy.lib.stride_tricks.as_strided(
-        numpy.pad(array, sampling_length // 2),
-        shape=(len(array), sampling_length),
+        numpy.pad(array, sampling_length // 2, constant_values=padding_value),
+        shape=(len(array) + (sampling_length + 1) % 2, sampling_length),
         strides=array.strides + array.strides,
     )
 
@@ -70,8 +70,21 @@ def pre_process(datas: List[InputData], sampling_length: int):
 
         x = numpy.concatenate(
             [
-                stride_array(array=mora_f0_mean, sampling_length=sampling_length),
-                stride_array(array=mora_voiced_ratio, sampling_length=sampling_length),
+                stride_array(
+                    array=mora_f0_mean,
+                    sampling_length=sampling_length,
+                    padding_value=-10,
+                ),
+                stride_array(
+                    array=mora_voiced_ratio,
+                    sampling_length=sampling_length,
+                    padding_value=0,
+                ),
+                stride_array(
+                    array=mora_f0_mean[1:] - mora_f0_mean[:-1],
+                    sampling_length=sampling_length - 1,
+                    padding_value=0,
+                ),
             ],
             axis=1,
         )
@@ -141,6 +154,66 @@ def create_data(
     return train_datas, valid_datas
 
 
+def train(
+    output_path: Path,
+    output_graph_path: Path,
+    sampling_length: int,
+    dtc_min_samples_split: float,
+    dtc_min_samples_leaf: float,
+    seed: int,
+    train_X: numpy.ndarray,
+    train_y: numpy.ndarray,
+    valid_X: numpy.ndarray,
+    valid_y: numpy.ndarray,
+    valid_split_index: numpy.ndarray,
+    valid_datas: List[InputData],
+):
+    model = DecisionTreeClassifier(
+        class_weight="balanced",
+        min_samples_split=dtc_min_samples_split,
+        min_samples_leaf=dtc_min_samples_leaf,
+        random_state=seed,
+    )
+    model.fit(train_X, train_y)
+
+    # train_predicted = model.predict(train_X)
+    # train_precision = precision_score(train_y, train_predicted)
+    # train_recall = recall_score(train_y, train_predicted)
+    # train_accuracy = accuracy_score(train_y, train_predicted)
+
+    valid_predicted = model.predict(valid_X)
+    valid_precision = precision_score(valid_y, valid_predicted)
+    valid_recall = recall_score(valid_y, valid_predicted)
+    valid_accuracy = accuracy_score(valid_y, valid_predicted)
+
+    valid_prob = model.predict_proba(valid_X)
+    obj = {
+        data.name: predicted
+        for predicted, data in zip(
+            numpy.split(valid_prob, valid_split_index), valid_datas
+        )
+    }
+    numpy.save(output_path, obj)
+
+    export_graphviz(
+        model,
+        out_file=str(output_graph_path),
+        feature_names=(
+            [f"f0_{i-sampling_length//2}" for i in range(sampling_length)]
+            + [f"vuv_{i-sampling_length//2}" for i in range(sampling_length)]
+            + [
+                f"f0diff_{i-sampling_length//2}_{i+1-sampling_length//2}"
+                for i in range(sampling_length - 1)
+            ]
+        ),
+        class_names=["F", "T"],
+        filled=True,
+        rounded=True,
+    )
+
+    return valid_precision, valid_recall, valid_accuracy
+
+
 def run(
     f0_dir: Path,
     phoneme_list_dir: Path,
@@ -148,13 +221,16 @@ def run(
     accent_end_dir: Path,
     output_start_path: Path,
     output_end_path: Path,
+    output_start_graph_path: Path,
+    output_end_graph_path: Path,
     output_score_path: Path,
     data_num: Optional[int],
     speaker_valid_filter: Optional[str],
     utterance_valid_filter: Optional[str],
     sampling_length: int,
-    svc_c: float,
-    svc_seed: int,
+    dtc_min_samples_split: float,
+    dtc_min_samples_leaf: float,
+    seed: int,
 ):
     config = deepcopy(locals())
 
@@ -175,51 +251,35 @@ def run(
         datas=valid_datas, sampling_length=sampling_length
     )
 
-    start_svc = SVC(
-        class_weight="balanced", verbose=True, C=svc_c, random_state=svc_seed
+    valid_start_precision, valid_start_recall, valid_start_accuracy = train(
+        output_path=output_start_path,
+        output_graph_path=output_start_graph_path,
+        sampling_length=sampling_length,
+        dtc_min_samples_split=dtc_min_samples_split,
+        dtc_min_samples_leaf=dtc_min_samples_leaf,
+        seed=seed,
+        train_X=train_X,
+        train_y=train_start_y,
+        valid_X=valid_X,
+        valid_y=valid_start_y,
+        valid_split_index=valid_split_index,
+        valid_datas=valid_datas,
     )
-    start_svc.fit(train_X, train_start_y)
 
-    # train_start_predicted = start_svc.predict(train_X)
-    # train_start_precision = precision_score(train_start_y, train_start_predicted)
-    # train_start_recall = recall_score(train_start_y, train_start_predicted)
-    # train_start_accuracy = accuracy_score(train_start_y, train_start_predicted)
-
-    valid_start_predicted = start_svc.predict(valid_X)
-    valid_start_precision = precision_score(valid_start_y, valid_start_predicted)
-    valid_start_recall = recall_score(valid_start_y, valid_start_predicted)
-    valid_start_accuracy = accuracy_score(valid_start_y, valid_start_predicted)
-
-    valid_start_prob = start_svc.decision_function(valid_X)
-    obj = {
-        data.name: predicted
-        for predicted, data in zip(
-            numpy.split(valid_start_prob, valid_split_index), valid_datas
-        )
-    }
-    numpy.save(output_start_path, obj)
-
-    end_svc = SVC(class_weight="balanced", verbose=True, C=svc_c, random_state=svc_seed)
-    end_svc.fit(train_X, train_end_y)
-
-    # train_end_predicted = end_svc.predict(train_X)
-    # train_end_precision = precision_score(train_end_y, train_end_predicted)
-    # train_end_recall = recall_score(train_end_y, train_end_predicted)
-    # train_end_accuracy = accuracy_score(train_end_y, train_end_predicted)
-
-    valid_end_predicted = end_svc.predict(valid_X)
-    valid_end_precision = precision_score(valid_end_y, valid_end_predicted)
-    valid_end_recall = recall_score(valid_end_y, valid_end_predicted)
-    valid_end_accuracy = accuracy_score(valid_end_y, valid_end_predicted)
-
-    valid_end_prob = end_svc.decision_function(valid_X)
-    obj = {
-        data.name: predicted
-        for predicted, data in zip(
-            numpy.split(valid_end_prob, valid_split_index), valid_datas
-        )
-    }
-    numpy.save(output_end_path, obj)
+    valid_end_precision, valid_end_recall, valid_end_accuracy = train(
+        output_path=output_end_path,
+        output_graph_path=output_end_graph_path,
+        sampling_length=sampling_length,
+        dtc_min_samples_split=dtc_min_samples_split,
+        dtc_min_samples_leaf=dtc_min_samples_leaf,
+        seed=seed,
+        train_X=train_X,
+        train_y=train_end_y,
+        valid_X=valid_X,
+        valid_y=valid_end_y,
+        valid_split_index=valid_split_index,
+        valid_datas=valid_datas,
+    )
 
     df = DataFrame(
         [
@@ -251,11 +311,14 @@ if __name__ == "__main__":
     parser.add_argument("--accent_end_dir", type=Path, required=True)
     parser.add_argument("--output_start_path", type=Path, required=True)
     parser.add_argument("--output_end_path", type=Path, required=True)
+    parser.add_argument("--output_start_graph_path", type=Path, required=True)
+    parser.add_argument("--output_end_graph_path", type=Path, required=True)
     parser.add_argument("--output_score_path", type=Path, required=True)
     parser.add_argument("--data_num", type=int)
     parser.add_argument("--speaker_valid_filter", type=str)
     parser.add_argument("--utterance_valid_filter", type=str)
     parser.add_argument("--sampling_length", type=int, required=True)
-    parser.add_argument("--svc_c", type=float, required=True)
-    parser.add_argument("--svc_seed", type=int, required=True)
+    parser.add_argument("--dtc_min_samples_split", type=float, required=True)
+    parser.add_argument("--dtc_min_samples_leaf", type=float, required=True)
+    parser.add_argument("--seed", type=int, required=True)
     run(**vars(parser.parse_args()))
