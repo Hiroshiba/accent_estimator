@@ -95,8 +95,9 @@ def pre_process(datas: List[InputData], sampling_length: int):
         list(chain.from_iterable(mora_accent_starts)), dtype=numpy.int32
     )
     end_y = numpy.array(list(chain.from_iterable(mora_accent_ends)), dtype=numpy.int32)
+    y = start_y + numpy.roll(end_y, 1) * 2
     split_index = numpy.cumsum([len(a) for a in mora_accent_starts[:-1]])
-    return X, start_y, end_y, split_index
+    return X, y, split_index
 
 
 def create_data(
@@ -154,75 +155,13 @@ def create_data(
     return train_datas, valid_datas
 
 
-def train(
-    output_path: Path,
-    output_graph_path: Path,
-    sampling_length: int,
-    dtc_min_samples_split: float,
-    dtc_min_samples_leaf: float,
-    seed: int,
-    train_X: numpy.ndarray,
-    train_y: numpy.ndarray,
-    valid_X: numpy.ndarray,
-    valid_y: numpy.ndarray,
-    valid_split_index: numpy.ndarray,
-    valid_datas: List[InputData],
-):
-    model = DecisionTreeClassifier(
-        class_weight="balanced",
-        min_samples_split=dtc_min_samples_split,
-        min_samples_leaf=dtc_min_samples_leaf,
-        random_state=seed,
-    )
-    model.fit(train_X, train_y)
-
-    # train_predicted = model.predict(train_X)
-    # train_precision = precision_score(train_y, train_predicted)
-    # train_recall = recall_score(train_y, train_predicted)
-    # train_accuracy = accuracy_score(train_y, train_predicted)
-
-    valid_predicted = model.predict(valid_X)
-    valid_precision = precision_score(valid_y, valid_predicted)
-    valid_recall = recall_score(valid_y, valid_predicted)
-    valid_accuracy = accuracy_score(valid_y, valid_predicted)
-
-    valid_prob = model.predict_proba(valid_X)
-    obj = {
-        data.name: predicted
-        for predicted, data in zip(
-            numpy.split(valid_prob, valid_split_index), valid_datas
-        )
-    }
-    numpy.save(output_path, obj)
-
-    export_graphviz(
-        model,
-        out_file=str(output_graph_path),
-        feature_names=(
-            [f"f0_{i-sampling_length//2}" for i in range(sampling_length)]
-            + [f"vuv_{i-sampling_length//2}" for i in range(sampling_length)]
-            + [
-                f"f0diff_{i-sampling_length//2}_{i+1-sampling_length//2}"
-                for i in range(sampling_length - 1)
-            ]
-        ),
-        class_names=["F", "T"],
-        filled=True,
-        rounded=True,
-    )
-
-    return valid_precision, valid_recall, valid_accuracy
-
-
 def run(
     f0_dir: Path,
     phoneme_list_dir: Path,
     accent_start_dir: Path,
     accent_end_dir: Path,
-    output_start_path: Path,
-    output_end_path: Path,
-    output_start_graph_path: Path,
-    output_end_graph_path: Path,
+    output_path: Path,
+    output_graph_path: Path,
     output_score_path: Path,
     data_num: Optional[int],
     speaker_valid_filter: Optional[str],
@@ -244,55 +183,69 @@ def run(
         data_num=data_num,
     )
 
-    train_X, train_start_y, train_end_y, train_split_index = pre_process(
+    train_X, train_y, train_split_index = pre_process(
         datas=train_datas, sampling_length=sampling_length
     )
-    valid_X, valid_start_y, valid_end_y, valid_split_index = pre_process(
+    valid_X, valid_y, valid_split_index = pre_process(
         datas=valid_datas, sampling_length=sampling_length
     )
-
-    valid_start_precision, valid_start_recall, valid_start_accuracy = train(
-        output_path=output_start_path,
-        output_graph_path=output_start_graph_path,
-        sampling_length=sampling_length,
-        dtc_min_samples_split=dtc_min_samples_split,
-        dtc_min_samples_leaf=dtc_min_samples_leaf,
-        seed=seed,
-        train_X=train_X,
-        train_y=train_start_y,
-        valid_X=valid_X,
-        valid_y=valid_start_y,
-        valid_split_index=valid_split_index,
-        valid_datas=valid_datas,
+    model = DecisionTreeClassifier(
+        class_weight="balanced",
+        min_samples_split=dtc_min_samples_split,
+        min_samples_leaf=dtc_min_samples_leaf,
+        random_state=seed,
     )
+    model.fit(train_X, train_y)
 
-    valid_end_precision, valid_end_recall, valid_end_accuracy = train(
-        output_path=output_end_path,
-        output_graph_path=output_end_graph_path,
-        sampling_length=sampling_length,
-        dtc_min_samples_split=dtc_min_samples_split,
-        dtc_min_samples_leaf=dtc_min_samples_leaf,
-        seed=seed,
-        train_X=train_X,
-        train_y=train_end_y,
-        valid_X=valid_X,
-        valid_y=valid_end_y,
-        valid_split_index=valid_split_index,
-        valid_datas=valid_datas,
+    # train_predicted = model.predict(train_X)
+    # train_precision = precision_score(train_y, train_predicted)
+    # train_recall = recall_score(train_y, train_predicted)
+    # train_accuracy = accuracy_score(train_y, train_predicted)
+
+    valid_predicted = model.predict(valid_X)
+
+    valid_start_precision = precision_score(valid_y == 1, valid_predicted == 1)
+    valid_start_recall = recall_score(valid_y == 1, valid_predicted == 1)
+    valid_start_accuracy = accuracy_score(valid_y == 1, valid_predicted == 1)
+
+    valid_end_precision = precision_score(valid_y == 2, valid_predicted == 2)
+    valid_end_recall = recall_score(valid_y == 2, valid_predicted == 2)
+    valid_end_accuracy = accuracy_score(valid_y == 2, valid_predicted == 2)
+
+    valid_prob = model.predict_proba(valid_X)
+    obj = {
+        data.name: predicted
+        for predicted, data in zip(
+            numpy.split(valid_prob, valid_split_index), valid_datas
+        )
+    }
+    numpy.save(output_path, obj)
+
+    export_graphviz(
+        model,
+        out_file=str(output_graph_path),
+        feature_names=(
+            [f"f0_{i-sampling_length//2}" for i in range(sampling_length)]
+            + [f"vuv_{i-sampling_length//2}" for i in range(sampling_length)]
+            + [
+                f"f0diff_{i-sampling_length//2}_{i+1-sampling_length//2}"
+                for i in range(sampling_length - 1)
+            ]
+        ),
+        class_names=["", "+1", "-1"],
+        filled=True,
+        rounded=True,
     )
 
     df = DataFrame(
         [
             dict(
-                # train_start_precision=train_start_precision,
-                # train_start_recall=train_start_recall,
-                # train_start_accuracy=train_start_accuracy,
+                # train_precision=train_precision,
+                # train_recall=train_recall,
+                # train_accuracy=train_accuracy,
                 valid_start_precision=valid_start_precision,
                 valid_start_recall=valid_start_recall,
                 valid_start_accuracy=valid_start_accuracy,
-                # train_end_precision=train_end_precision,
-                # train_end_recall=train_end_recall,
-                # train_end_accuracy=train_end_accuracy,
                 valid_end_precision=valid_end_precision,
                 valid_end_recall=valid_end_recall,
                 valid_end_accuracy=valid_end_accuracy,
@@ -309,10 +262,8 @@ if __name__ == "__main__":
     parser.add_argument("--phoneme_list_dir", type=Path, required=True)
     parser.add_argument("--accent_start_dir", type=Path, required=True)
     parser.add_argument("--accent_end_dir", type=Path, required=True)
-    parser.add_argument("--output_start_path", type=Path, required=True)
-    parser.add_argument("--output_end_path", type=Path, required=True)
-    parser.add_argument("--output_start_graph_path", type=Path, required=True)
-    parser.add_argument("--output_end_graph_path", type=Path, required=True)
+    parser.add_argument("--output_path", type=Path, required=True)
+    parser.add_argument("--output_graph_path", type=Path, required=True)
     parser.add_argument("--output_score_path", type=Path, required=True)
     parser.add_argument("--data_num", type=int)
     parser.add_argument("--speaker_valid_filter", type=str)
