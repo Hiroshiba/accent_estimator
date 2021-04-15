@@ -42,6 +42,8 @@ class InputData:
     phoneme_list: List[JvsPhoneme]
     accent_start: List[bool]
     accent_end: List[bool]
+    accent_phrase_start: List[bool]
+    accent_phrase_end: List[bool]
 
 
 def pre_process(datas: List[InputData], sampling_length: int):
@@ -56,6 +58,13 @@ def pre_process(datas: List[InputData], sampling_length: int):
 
         mora_accent_starts.append([d.accent_start[i] for i in mora_indexes])
         mora_accent_ends.append([d.accent_end[i] for i in mora_indexes])
+
+        mora_accent_phrase_start = numpy.array(
+            [d.accent_phrase_start[i] for i in mora_indexes]
+        )
+        mora_accent_phrase_end = numpy.array(
+            [d.accent_phrase_end[i] for i in mora_indexes]
+        )
 
         f0 = d.f0.array.copy()
         f0[f0 == 0] = numpy.nan
@@ -85,6 +94,16 @@ def pre_process(datas: List[InputData], sampling_length: int):
                     sampling_length=sampling_length - 1,
                     padding_value=0,
                 ),
+                stride_array(
+                    array=mora_accent_phrase_start,
+                    sampling_length=sampling_length,
+                    padding_value=0,
+                ),
+                stride_array(
+                    array=mora_accent_phrase_end,
+                    sampling_length=sampling_length,
+                    padding_value=0,
+                ),
             ],
             axis=1,
         )
@@ -105,6 +124,8 @@ def create_data(
     phoneme_list_dir: Path,
     accent_start_dir: Path,
     accent_end_dir: Path,
+    accent_phrase_start_dir: Path,
+    accent_phrase_end_dir: Path,
     speaker_valid_filter: Optional[str],
     utterance_valid_filter: Optional[str],
     data_num: Optional[int],
@@ -129,6 +150,16 @@ def create_data(
         accent_end_paths = accent_end_paths[:data_num]
     assert len(f0_paths) == len(accent_end_paths)
 
+    accent_phrase_start_paths = sorted(accent_phrase_start_dir.rglob("*.txt"))
+    if data_num is not None:
+        accent_phrase_start_paths = accent_phrase_start_paths[:data_num]
+    assert len(f0_paths) == len(accent_phrase_start_paths)
+
+    accent_phrase_end_paths = sorted(accent_phrase_end_dir.rglob("*.txt"))
+    if data_num is not None:
+        accent_phrase_end_paths = accent_phrase_end_paths[:data_num]
+    assert len(f0_paths) == len(accent_phrase_end_paths)
+
     datas = [
         InputData(
             name=f0_path.stem,
@@ -136,9 +167,27 @@ def create_data(
             phoneme_list=JvsPhoneme.load_julius_list(phoneme_list_path),
             accent_start=[bool(int(s)) for s in accent_start_path.read_text().split()],
             accent_end=[bool(int(s)) for s in accent_end_path.read_text().split()],
+            accent_phrase_start=[
+                bool(int(s)) for s in accent_phrase_start_path.read_text().split()
+            ],
+            accent_phrase_end=[
+                bool(int(s)) for s in accent_phrase_end_path.read_text().split()
+            ],
         )
-        for f0_path, phoneme_list_path, accent_start_path, accent_end_path in zip(
-            f0_paths, phoneme_list_paths, accent_start_paths, accent_end_paths
+        for (
+            f0_path,
+            phoneme_list_path,
+            accent_start_path,
+            accent_end_path,
+            accent_phrase_start_path,
+            accent_phrase_end_path,
+        ) in zip(
+            f0_paths,
+            phoneme_list_paths,
+            accent_start_paths,
+            accent_end_paths,
+            accent_phrase_start_paths,
+            accent_phrase_end_paths,
         )
     ]
 
@@ -160,6 +209,8 @@ def run(
     phoneme_list_dir: Path,
     accent_start_dir: Path,
     accent_end_dir: Path,
+    accent_phrase_start_dir: Path,
+    accent_phrase_end_dir: Path,
     output_path: Path,
     output_graph_path: Path,
     output_score_path: Path,
@@ -178,6 +229,8 @@ def run(
         phoneme_list_dir=phoneme_list_dir,
         accent_start_dir=accent_start_dir,
         accent_end_dir=accent_end_dir,
+        accent_phrase_start_dir=accent_phrase_start_dir,
+        accent_phrase_end_dir=accent_phrase_end_dir,
         speaker_valid_filter=speaker_valid_filter,
         utterance_valid_filter=utterance_valid_filter,
         data_num=data_num,
@@ -231,6 +284,8 @@ def run(
                 f"f0diff_{i-sampling_length//2}_{i+1-sampling_length//2}"
                 for i in range(sampling_length - 1)
             ]
+            + [f"aps_{i-sampling_length//2}" for i in range(sampling_length)]
+            + [f"ape_{i-sampling_length//2}" for i in range(sampling_length)]
         ),
         class_names=["", "+1", "-1"],
         filled=True,
@@ -262,6 +317,8 @@ if __name__ == "__main__":
     parser.add_argument("--phoneme_list_dir", type=Path, required=True)
     parser.add_argument("--accent_start_dir", type=Path, required=True)
     parser.add_argument("--accent_end_dir", type=Path, required=True)
+    parser.add_argument("--accent_phrase_start_dir", type=Path, required=True)
+    parser.add_argument("--accent_phrase_end_dir", type=Path, required=True)
     parser.add_argument("--output_path", type=Path, required=True)
     parser.add_argument("--output_graph_path", type=Path, required=True)
     parser.add_argument("--output_score_path", type=Path, required=True)
