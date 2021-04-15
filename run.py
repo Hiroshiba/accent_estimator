@@ -27,6 +27,11 @@ def voiced_ratio(f0: numpy.ndarray, rate: float, split_second_list: List[float])
     return numpy.array([numpy.mean(~numpy.isnan(a)) for a in numpy.split(f0, indexes)])
 
 
+def loudness_mean(loudness: numpy.ndarray, rate: float, split_second_list: List[float]):
+    indexes = numpy.floor(numpy.array(split_second_list) * rate).astype(int)
+    return numpy.array([numpy.mean(a) for a in numpy.split(loudness, indexes)])
+
+
 def stride_array(array: numpy.ndarray, sampling_length: int, padding_value: float):
     return numpy.lib.stride_tricks.as_strided(
         numpy.pad(array, sampling_length // 2, constant_values=padding_value),
@@ -40,6 +45,7 @@ class InputData:
     name: str
     f0: SamplingData
     phoneme_list: List[JvsPhoneme]
+    loudness: SamplingData
     accent_start: List[bool]
     accent_end: List[bool]
     accent_phrase_start: List[bool]
@@ -77,6 +83,12 @@ def pre_process(datas: List[InputData], sampling_length: int):
             f0=norm_f0, rate=d.f0.rate, split_second_list=mora_seconds[:-1]
         )
 
+        mora_loudness_mean = loudness_mean(
+            loudness=d.loudness.array,
+            rate=d.loudness.rate,
+            split_second_list=mora_seconds[:-1],
+        )
+
         x = numpy.concatenate(
             [
                 stride_array(
@@ -104,6 +116,16 @@ def pre_process(datas: List[InputData], sampling_length: int):
                     sampling_length=sampling_length,
                     padding_value=0,
                 ),
+                stride_array(
+                    array=mora_loudness_mean,
+                    sampling_length=sampling_length,
+                    padding_value=0,
+                ),
+                stride_array(
+                    array=mora_loudness_mean[1:] - mora_loudness_mean[:-1],
+                    sampling_length=sampling_length - 1,
+                    padding_value=0,
+                ),
             ],
             axis=1,
         )
@@ -122,6 +144,7 @@ def pre_process(datas: List[InputData], sampling_length: int):
 def create_data(
     f0_dir: Path,
     phoneme_list_dir: Path,
+    loudness_dir: Path,
     accent_start_dir: Path,
     accent_end_dir: Path,
     accent_phrase_start_dir: Path,
@@ -139,6 +162,11 @@ def create_data(
     if data_num is not None:
         phoneme_list_paths = phoneme_list_paths[:data_num]
     assert len(f0_paths) == len(phoneme_list_paths)
+
+    loudness_paths = sorted(loudness_dir.rglob("*.npy"))
+    if data_num is not None:
+        loudness_paths = loudness_paths[:data_num]
+    assert len(f0_paths) == len(loudness_paths)
 
     accent_start_paths = sorted(accent_start_dir.rglob("*.txt"))
     if data_num is not None:
@@ -165,6 +193,7 @@ def create_data(
             name=f0_path.stem,
             f0=SamplingData.load(f0_path),
             phoneme_list=JvsPhoneme.load_julius_list(phoneme_list_path),
+            loudness=SamplingData.load(loudness_path),
             accent_start=[bool(int(s)) for s in accent_start_path.read_text().split()],
             accent_end=[bool(int(s)) for s in accent_end_path.read_text().split()],
             accent_phrase_start=[
@@ -177,6 +206,7 @@ def create_data(
         for (
             f0_path,
             phoneme_list_path,
+            loudness_path,
             accent_start_path,
             accent_end_path,
             accent_phrase_start_path,
@@ -184,6 +214,7 @@ def create_data(
         ) in zip(
             f0_paths,
             phoneme_list_paths,
+            loudness_paths,
             accent_start_paths,
             accent_end_paths,
             accent_phrase_start_paths,
@@ -207,6 +238,7 @@ def create_data(
 def run(
     f0_dir: Path,
     phoneme_list_dir: Path,
+    loudness_dir: Path,
     accent_start_dir: Path,
     accent_end_dir: Path,
     accent_phrase_start_dir: Path,
@@ -227,6 +259,7 @@ def run(
     train_datas, valid_datas = create_data(
         f0_dir=f0_dir,
         phoneme_list_dir=phoneme_list_dir,
+        loudness_dir=loudness_dir,
         accent_start_dir=accent_start_dir,
         accent_end_dir=accent_end_dir,
         accent_phrase_start_dir=accent_phrase_start_dir,
@@ -250,17 +283,25 @@ def run(
     )
     model.fit(train_X, train_y)
 
-    # train_predicted = model.predict(train_X)
-    # train_precision = precision_score(train_y, train_predicted)
-    # train_recall = recall_score(train_y, train_predicted)
-    # train_accuracy = accuracy_score(train_y, train_predicted)
+    # train accuracy
+    random_state = numpy.random.RandomState(seed)
+    idx = random_state.permutation(len(train_datas))[: len(valid_datas)]
+    test_train_X, test_train_y, _ = pre_process(
+        datas=[train_datas[i] for i in idx], sampling_length=sampling_length
+    )
+    train_predicted = model.predict(test_train_X)
+    train_start_precision = precision_score(test_train_y == 1, train_predicted == 1)
+    train_start_recall = recall_score(test_train_y == 1, train_predicted == 1)
+    train_start_accuracy = accuracy_score(test_train_y == 1, train_predicted == 1)
+    train_end_precision = precision_score(test_train_y == 2, train_predicted == 2)
+    train_end_recall = recall_score(test_train_y == 2, train_predicted == 2)
+    train_end_accuracy = accuracy_score(test_train_y == 2, train_predicted == 2)
 
+    # vaild accuracy
     valid_predicted = model.predict(valid_X)
-
     valid_start_precision = precision_score(valid_y == 1, valid_predicted == 1)
     valid_start_recall = recall_score(valid_y == 1, valid_predicted == 1)
     valid_start_accuracy = accuracy_score(valid_y == 1, valid_predicted == 1)
-
     valid_end_precision = precision_score(valid_y == 2, valid_predicted == 2)
     valid_end_recall = recall_score(valid_y == 2, valid_predicted == 2)
     valid_end_accuracy = accuracy_score(valid_y == 2, valid_predicted == 2)
@@ -286,6 +327,11 @@ def run(
             ]
             + [f"aps_{i-sampling_length//2}" for i in range(sampling_length)]
             + [f"ape_{i-sampling_length//2}" for i in range(sampling_length)]
+            + [f"loud_{i-sampling_length//2}" for i in range(sampling_length)]
+            + [
+                f"louddiff_{i-sampling_length//2}_{i+1-sampling_length//2}"
+                for i in range(sampling_length - 1)
+            ]
         ),
         class_names=["", "+1", "-1"],
         filled=True,
@@ -295,9 +341,12 @@ def run(
     df = DataFrame(
         [
             dict(
-                # train_precision=train_precision,
-                # train_recall=train_recall,
-                # train_accuracy=train_accuracy,
+                train_start_precision=train_start_precision,
+                train_start_recall=train_start_recall,
+                train_start_accuracy=train_start_accuracy,
+                train_end_precision=train_end_precision,
+                train_end_recall=train_end_recall,
+                train_end_accuracy=train_end_accuracy,
                 valid_start_precision=valid_start_precision,
                 valid_start_recall=valid_start_recall,
                 valid_start_accuracy=valid_start_accuracy,
@@ -315,6 +364,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--f0_dir", type=Path, required=True)
     parser.add_argument("--phoneme_list_dir", type=Path, required=True)
+    parser.add_argument("--loudness_dir", type=Path, required=True)
     parser.add_argument("--accent_start_dir", type=Path, required=True)
     parser.add_argument("--accent_end_dir", type=Path, required=True)
     parser.add_argument("--accent_phrase_start_dir", type=Path, required=True)
