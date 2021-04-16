@@ -10,7 +10,7 @@ from acoustic_feature_extractor.data.phoneme import JvsPhoneme
 from acoustic_feature_extractor.data.sampling_data import SamplingData
 from pandas import DataFrame
 from sklearn.metrics import accuracy_score, precision_score, recall_score
-from sklearn.tree import DecisionTreeClassifier, export_graphviz
+from sklearn.tree import DecisionTreeClassifier
 
 mora_phoneme_list = ["a", "i", "u", "e", "o", "I", "U", "E", "N", "cl", "pau"]
 
@@ -37,6 +37,29 @@ def stride_array(array: numpy.ndarray, sampling_length: int, padding_value: floa
         numpy.pad(array, sampling_length // 2, constant_values=padding_value),
         shape=(len(array) + (sampling_length + 1) % 2, sampling_length),
         strides=array.strides + array.strides,
+    )
+
+
+def diff_array(
+    array: numpy.ndarray, stride: int, sampling_length: int, padding_value: float
+):
+    diff = array[:-stride] - array[stride:]
+    return numpy.lib.stride_tricks.as_strided(
+        numpy.pad(diff, stride, constant_values=padding_value),
+        shape=(len(array), sampling_length),
+        strides=array.strides + (array.strides[0] * stride,),
+    )
+
+
+def pad_diff_array(
+    array: numpy.ndarray, stride: int, sampling_length: int, padding_value: float
+):
+    array2 = numpy.pad(array, stride, constant_values=padding_value)
+    diff = array2[:-stride] - array2[stride:]
+    return numpy.lib.stride_tricks.as_strided(
+        diff,
+        shape=(len(array), sampling_length),
+        strides=array.strides + (array.strides[0] * stride,),
     )
 
 
@@ -91,11 +114,11 @@ def pre_process(datas: List[InputData], sampling_length: int):
 
         x = numpy.concatenate(
             [
-                stride_array(
-                    array=mora_f0_mean,
-                    sampling_length=sampling_length,
-                    padding_value=-10,
-                ),
+                # stride_array(
+                #     array=mora_f0_mean,
+                #     sampling_length=sampling_length,
+                #     padding_value=-10,
+                # ),
                 stride_array(
                     array=mora_voiced_ratio,
                     sampling_length=sampling_length,
@@ -106,6 +129,12 @@ def pre_process(datas: List[InputData], sampling_length: int):
                     sampling_length=sampling_length - 1,
                     padding_value=0,
                 ),
+                # diff_array(
+                #     array=mora_f0_mean,
+                #     stride=2,
+                #     sampling_length=2,
+                #     padding_value=0,
+                # ),
                 stride_array(
                     array=mora_accent_phrase_start,
                     sampling_length=sampling_length,
@@ -116,16 +145,22 @@ def pre_process(datas: List[InputData], sampling_length: int):
                     sampling_length=sampling_length,
                     padding_value=0,
                 ),
-                stride_array(
-                    array=mora_loudness_mean,
-                    sampling_length=sampling_length,
-                    padding_value=0,
-                ),
+                # stride_array(
+                #     array=mora_loudness_mean,
+                #     sampling_length=sampling_length,
+                #     padding_value=0,
+                # ),
                 stride_array(
                     array=mora_loudness_mean[1:] - mora_loudness_mean[:-1],
                     sampling_length=sampling_length - 1,
                     padding_value=0,
                 ),
+                # pad_diff_array(
+                #     array=mora_loudness_mean,
+                #     stride=2,
+                #     sampling_length=2,
+                #     padding_value=0,
+                # ),
             ],
             axis=1,
         )
@@ -244,7 +279,6 @@ def run(
     accent_phrase_start_dir: Path,
     accent_phrase_end_dir: Path,
     output_path: Path,
-    output_graph_path: Path,
     output_score_path: Path,
     data_num: Optional[int],
     speaker_valid_filter: Optional[str],
@@ -315,29 +349,6 @@ def run(
     }
     numpy.save(output_path, obj)
 
-    export_graphviz(
-        model,
-        out_file=str(output_graph_path),
-        feature_names=(
-            [f"f0_{i-sampling_length//2}" for i in range(sampling_length)]
-            + [f"vuv_{i-sampling_length//2}" for i in range(sampling_length)]
-            + [
-                f"f0diff_{i-sampling_length//2}_{i+1-sampling_length//2}"
-                for i in range(sampling_length - 1)
-            ]
-            + [f"aps_{i-sampling_length//2}" for i in range(sampling_length)]
-            + [f"ape_{i-sampling_length//2}" for i in range(sampling_length)]
-            + [f"loud_{i-sampling_length//2}" for i in range(sampling_length)]
-            + [
-                f"louddiff_{i-sampling_length//2}_{i+1-sampling_length//2}"
-                for i in range(sampling_length - 1)
-            ]
-        ),
-        class_names=["", "+1", "-1"],
-        filled=True,
-        rounded=True,
-    )
-
     df = DataFrame(
         [
             dict(
@@ -370,7 +381,6 @@ if __name__ == "__main__":
     parser.add_argument("--accent_phrase_start_dir", type=Path, required=True)
     parser.add_argument("--accent_phrase_end_dir", type=Path, required=True)
     parser.add_argument("--output_path", type=Path, required=True)
-    parser.add_argument("--output_graph_path", type=Path, required=True)
     parser.add_argument("--output_score_path", type=Path, required=True)
     parser.add_argument("--data_num", type=int)
     parser.add_argument("--speaker_valid_filter", type=str)
