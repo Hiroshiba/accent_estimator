@@ -85,6 +85,10 @@ def pre_process(datas: List[InputData], sampling_length: int):
         ]
         mora_seconds = [d.phoneme_list[i].end for i in mora_indexes]
 
+        # mora_phoneme_num = numpy.r_[
+        #     1, numpy.array(mora_indexes)[1:] - numpy.array(mora_indexes)[:-1]
+        # ].astype(numpy.float32)
+
         mora_accent_starts.append([d.accent_start[i] for i in mora_indexes])
         mora_accent_ends.append([d.accent_end[i] for i in mora_indexes])
 
@@ -161,6 +165,7 @@ def pre_process(datas: List[InputData], sampling_length: int):
                 #     sampling_length=2,
                 #     padding_value=0,
                 # ),
+                # mora_phoneme_num[:, numpy.newaxis],
             ],
             axis=1,
         )
