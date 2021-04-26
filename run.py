@@ -13,12 +13,28 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score
 from sklearn.tree import DecisionTreeClassifier
 
 mora_phoneme_list = ["a", "i", "u", "e", "o", "I", "U", "E", "N", "cl", "pau"]
+voiced_phoneme_list = (
+    ["a", "i", "u", "e", "o", "A", "I", "U", "E", "O", "N"]
+    + ["n", "m", "y", "r", "w", "g", "z", "j", "d", "b"]
+    + ["ny", "my", "ry", "gy", "by"]
+)
+unvoiced_mora_phoneme_list = ["A", "I", "U", "E", "O", "cl", "pau"]
 
 
-def f0_mean(f0: numpy.ndarray, rate: float, split_second_list: List[float]):
+def f0_mean(
+    f0: numpy.ndarray,
+    rate: float,
+    split_second_list: List[float],
+    weight: numpy.ndarray,
+):
     indexes = numpy.floor(numpy.array(split_second_list) * rate).astype(int)
-    output = numpy.array([numpy.nanmean(a) for a in numpy.split(f0, indexes)])
-    output[numpy.isnan(output)] = -10
+    output = numpy.array(
+        [
+            numpy.sum(a[~numpy.isnan(a)] * b[~numpy.isnan(a)])
+            / numpy.sum(b[~numpy.isnan(a)])
+            for a, b in zip(numpy.split(f0, indexes), numpy.split(weight, indexes))
+        ]
+    )
     return output
 
 
@@ -83,11 +99,6 @@ def pre_process(datas: List[InputData], sampling_length: int):
         mora_indexes = [
             i for i, p in enumerate(d.phoneme_list) if p.phoneme in mora_phoneme_list
         ]
-        mora_seconds = [d.phoneme_list[i].end for i in mora_indexes]
-
-        # mora_phoneme_num = numpy.r_[
-        #     1, numpy.array(mora_indexes)[1:] - numpy.array(mora_indexes)[:-1]
-        # ].astype(numpy.float32)
 
         mora_accent_starts.append([d.accent_start[i] for i in mora_indexes])
         mora_accent_ends.append([d.accent_end[i] for i in mora_indexes])
@@ -99,46 +110,84 @@ def pre_process(datas: List[InputData], sampling_length: int):
             [d.accent_phrase_end[i] for i in mora_indexes]
         )
 
-        f0 = d.f0.array.copy()
+        rate = d.f0.rate
+        f0 = d.f0.array
         f0[f0 == 0] = numpy.nan
-        norm_f0 = (f0 - numpy.nanmean(f0)) / numpy.sqrt(numpy.nanstd(f0))
+        f0 = (f0 - numpy.nanmean(f0)) / numpy.sqrt(numpy.nanstd(f0))
 
-        mora_f0_mean = f0_mean(
-            f0=norm_f0, rate=d.f0.rate, split_second_list=mora_seconds[:-1]
+        loudness = d.loudness.resample(rate)
+
+        min_length = min(len(f0), len(loudness))
+        f0 = f0[:min_length]
+        loudness = loudness[:min_length]
+
+        phoneme_f0 = f0_mean(
+            f0=f0,
+            rate=rate,
+            split_second_list=[p.end for p in d.phoneme_list[:-1]],
+            weight=loudness,
         )
+        phoneme_f0[numpy.isnan(phoneme_f0)] = -10
+
+        phoneme_length = [p.end - p.start for p in d.phoneme_list]
+        mora_f0 = numpy.array([], dtype=numpy.float32)
+        for i, diff in enumerate(numpy.diff(numpy.r_[0, mora_indexes])):
+            index = mora_indexes[i]
+            if (
+                diff == 1
+                or d.phoneme_list[index - 1].phoneme not in voiced_phoneme_list
+            ):
+                mora_f0 = numpy.r_[mora_f0, phoneme_f0[index]]
+            else:
+                a = phoneme_f0[index - 1] * phoneme_length[index - 1]
+                b = phoneme_f0[index] * phoneme_length[index]
+                mora_f0 = numpy.r_[
+                    mora_f0,
+                    (a + b) / (phoneme_length[index] + phoneme_length[index - 1]),
+                ]
+
+        mora_f0[
+            [
+                d.phoneme_list[i].phoneme in unvoiced_mora_phoneme_list
+                for i in mora_indexes
+            ]
+        ] = -10
+
         mora_voiced_ratio = voiced_ratio(
-            f0=norm_f0, rate=d.f0.rate, split_second_list=mora_seconds[:-1]
+            f0=f0,
+            rate=rate,
+            split_second_list=[d.phoneme_list[i].end for i in mora_indexes][:-1],
         )
-
-        mora_loudness_mean = loudness_mean(
-            loudness=d.loudness.array,
-            rate=d.loudness.rate,
-            split_second_list=mora_seconds[:-1],
-        )
+        # mora_loudness = loudness_mean(
+        #     loudness=loudness, rate=rate, split_second_list=mora_seconds[:-1]
+        # )
 
         x = numpy.concatenate(
             [
                 # stride_array(
-                #     array=mora_f0_mean,
-                #     sampling_length=sampling_length,
+                #     array=mora_f0,
+                #     sampling_length=1,
                 #     padding_value=-10,
                 # ),
+                # stride_array(
+                #     array=mora_voiced_ratio,
+                #     sampling_length=sampling_length,
+                #     padding_value=0,
+                # ),
                 stride_array(
-                    array=mora_voiced_ratio,
-                    sampling_length=sampling_length,
-                    padding_value=0,
-                ),
-                stride_array(
-                    array=mora_f0_mean[1:] - mora_f0_mean[:-1],
+                    array=mora_f0[1:] - mora_f0[:-1],
                     sampling_length=sampling_length - 1,
                     padding_value=0,
                 ),
-                # diff_array(
-                #     array=mora_f0_mean,
-                #     stride=2,
-                #     sampling_length=2,
-                #     padding_value=0,
-                # ),
+                # *[
+                #     diff_array(
+                #         array=mora_f0,
+                #         stride=i + 1,
+                #         sampling_length=2,
+                #         padding_value=0,
+                #     )
+                #     for i in range(sampling_length // 2)
+                # ],
                 stride_array(
                     array=mora_accent_phrase_start,
                     sampling_length=sampling_length,
@@ -150,22 +199,21 @@ def pre_process(datas: List[InputData], sampling_length: int):
                     padding_value=0,
                 ),
                 # stride_array(
-                #     array=mora_loudness_mean,
+                #     array=mora_loudness,
                 #     sampling_length=sampling_length,
                 #     padding_value=0,
                 # ),
-                stride_array(
-                    array=mora_loudness_mean[1:] - mora_loudness_mean[:-1],
-                    sampling_length=sampling_length - 1,
-                    padding_value=0,
-                ),
+                # stride_array(
+                #     array=mora_loudness[1:] - mora_loudness[:-1],
+                #     sampling_length=sampling_length - 1,
+                #     padding_value=0,
+                # ),
                 # pad_diff_array(
-                #     array=mora_loudness_mean,
+                #     array=mora_loudness,
                 #     stride=2,
                 #     sampling_length=2,
                 #     padding_value=0,
                 # ),
-                # mora_phoneme_num[:, numpy.newaxis],
             ],
             axis=1,
         )
