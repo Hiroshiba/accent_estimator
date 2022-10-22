@@ -147,7 +147,7 @@ def train(config_yaml_path: Path, output_dir: Path):
         def reduce_result(results: List[ModelOutput]):
             result: Dict[str, Any] = {}
             sum_data_num = sum([r["data_num"] for r in results])
-            for key in set(result.keys()) - {"data_num"}:
+            for key in set(results[0].keys()) - {"data_num"}:
                 values = [r[key] * r["data_num"] for r in results]
                 if isinstance(values[0], Tensor):
                     result[key] = torch.stack(values).sum() / sum_data_num
