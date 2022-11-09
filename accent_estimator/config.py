@@ -6,16 +6,21 @@ from accent_estimator.utility.git_utility import get_branch_name, get_commit_id
 
 
 @dataclass
-class DatasetConfig:
+class DatasetFileConfig:
     f0_glob: str
     phoneme_list_glob: str
-    loudness_glob: str
+    volume_glob: str
     accent_start_glob: str
     accent_end_glob: str
     accent_phrase_start_glob: str
     accent_phrase_end_glob: str
+
+
+@dataclass
+class DatasetConfig:
+    train_file: DatasetFileConfig
+    valid_file: DatasetFileConfig
     test_num: int
-    eval_times_num: int = 1
     seed: int = 0
 
 

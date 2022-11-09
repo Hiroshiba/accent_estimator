@@ -1,8 +1,9 @@
-from typing import List, TypedDict
+from typing import List
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
+from typing_extensions import TypedDict
 
 from accent_estimator.config import ModelConfig
 from accent_estimator.dataset import OutputData
@@ -42,7 +43,7 @@ class Model(nn.Module):
         self.model_config = model_config
         self.predictor = predictor
 
-    def forward(self, data) -> ModelOutput:
+    def forward(self, data: OutputData) -> ModelOutput:
         output_list: List[Tensor]
         _, output_list = self.predictor(
             f0_list=data["mora_f0"],

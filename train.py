@@ -10,6 +10,8 @@ from torch.utils.data import DataLoader
 
 from accent_estimator.config import Config
 from accent_estimator.dataset import create_dataset
+from accent_estimator.evaluator import Evaluator
+from accent_estimator.generator import Generator
 from accent_estimator.model import Model, ModelOutput
 from accent_estimator.network.predictor import create_predictor
 from accent_estimator.utility.pytorch_utility import (
@@ -40,6 +42,12 @@ def train(config_yaml_path: Path, output_dir: Path):
     model.to(device)
     model.train()
 
+    # evaluator
+    generator = Generator(
+        config=config, predictor=predictor, use_gpu=config.train.use_gpu
+    )
+    evaluator = Evaluator(generator=generator)
+
     # dataset
     datasets = create_dataset(config.dataset)
 
@@ -48,6 +56,9 @@ def train(config_yaml_path: Path, output_dir: Path):
         num_workers = config.train.num_processes
 
     def _create_loader(dataset, for_train: bool, for_eval: bool):
+        if dataset is None:
+            return None
+
         batch_size = (
             config.train.eval_batch_size if for_eval else config.train.batch_size
         )
@@ -59,17 +70,14 @@ def train(config_yaml_path: Path, output_dir: Path):
             collate_fn=collate_list,
             pin_memory=config.train.use_gpu,
             drop_last=for_train,
-            timeout=0 if num_workers == 0 else 60,
+            timeout=0 if num_workers == 0 else 300,
         )
 
     datasets = create_dataset(config.dataset)
     train_loader = _create_loader(datasets["train"], for_train=True, for_eval=False)
     test_loader = _create_loader(datasets["test"], for_train=False, for_eval=False)
     eval_loader = _create_loader(datasets["test"], for_train=False, for_eval=True)
-
-    valid_loader = None
-    if datasets["valid"] is not None:
-        valid_loader = _create_loader(datasets["valid"], for_eval=True)
+    valid_loader = _create_loader(datasets["valid"], for_train=False, for_eval=True)
 
     # optimizer
     optimizer = make_optimizer(config_dict=config.train.optimizer, model=model)
@@ -171,23 +179,41 @@ def train(config_yaml_path: Path, output_dir: Path):
                 "iteration": iteration,
                 "lr": optimizer.param_groups[0]["lr"],
             }
+
+            if epoch % config.train.eval_epoch == 0:
+                eval_results: List[ModelOutput] = []
+                for batch in eval_loader:
+                    batch = to_device(batch, device, non_blocking=True)
+                    with torch.inference_mode():
+                        result = evaluator(batch)
+                    eval_results.append(detach_cpu(result))
+                summary["eval"] = reduce_result(eval_results)
+
+                valid_results: List[ModelOutput] = []
+                for batch in valid_loader:
+                    batch = to_device(batch, device, non_blocking=True)
+                    with torch.inference_mode():
+                        result = evaluator(batch)
+                    valid_results.append(detach_cpu(result))
+                summary["valid"] = reduce_result(valid_results)
+
+                if epoch % config.train.snapshot_epoch == 0:
+                    torch.save(
+                        {
+                            "model": model.state_dict(),
+                            "optimizer": optimizer.state_dict(),
+                            "logger": logger.state_dict(),
+                            "iteration": iteration,
+                            "epoch": epoch,
+                        },
+                        snapshot_path,
+                    )
+
+                    save_manager.save(
+                        value=summary["valid"]["value"], step=epoch, judge="min"
+                    )
+
             logger.log(summary=summary, step=epoch)
-
-            if epoch % config.train.snapshot_epoch == 0:
-                torch.save(
-                    {
-                        "model": model.state_dict(),
-                        "optimizer": optimizer.state_dict(),
-                        "logger": logger.state_dict(),
-                        "iteration": iteration,
-                        "epoch": epoch,
-                    },
-                    snapshot_path,
-                )
-
-                save_manager.save(
-                    value=summary["test"]["loss"], step=epoch, judge="min"
-                )
 
             model.train()
 

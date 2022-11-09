@@ -1,15 +1,16 @@
 from dataclasses import dataclass
 from glob import glob
 from pathlib import Path
-from typing import List, Sequence, TypedDict, Union
+from typing import List, Sequence, Union
 
 import numpy
 from acoustic_feature_extractor.data.phoneme import OjtPhoneme
 from acoustic_feature_extractor.data.sampling_data import SamplingData
 from torch import Tensor, as_tensor
-from torch.utils.data import ConcatDataset, Dataset
+from torch.utils.data import Dataset
+from typing_extensions import TypedDict
 
-from accent_estimator.config import DatasetConfig
+from accent_estimator.config import DatasetConfig, DatasetFileConfig
 
 mora_phoneme_list = ["a", "i", "u", "e", "o", "I", "U", "E", "N", "cl", "pau"]
 voiced_phoneme_list = (
@@ -41,7 +42,7 @@ def f0_mean(
 class InputData:
     f0: SamplingData
     phoneme_list: List[OjtPhoneme]
-    loudness: SamplingData
+    volume: SamplingData
     accent_start: List[bool]
     accent_end: List[bool]
     accent_phrase_start: List[bool]
@@ -52,7 +53,7 @@ class InputData:
 class LazyInputData:
     f0_path: Path
     phoneme_list_path: Path
-    loudness_path: Path
+    volume_path: Path
     accent_start_path: Path
     accent_end_path: Path
     accent_phrase_start_path: Path
@@ -62,7 +63,7 @@ class LazyInputData:
         return InputData(
             f0=SamplingData.load(self.f0_path),
             phoneme_list=OjtPhoneme.load_julius_list(self.phoneme_list_path),
-            loudness=SamplingData.load(self.loudness_path),
+            volume=SamplingData.load(self.volume_path),
             accent_start=[
                 bool(int(s)) for s in self.accent_start_path.read_text().split()
             ],
@@ -98,19 +99,18 @@ def preprocess(d: InputData):
     rate = d.f0.rate
     f0 = d.f0.array
     f0[f0 == 0] = numpy.nan
-    f0 = (f0 - numpy.nanmean(f0)) / numpy.sqrt(numpy.nanstd(f0)) + 5
 
-    loudness = d.loudness.resample(rate)
+    volume = d.volume.resample(rate)
 
-    min_length = min(len(f0), len(loudness))
+    min_length = min(len(f0), len(volume))
     f0 = f0[:min_length]
-    loudness = loudness[:min_length]
+    volume = volume[:min_length]
 
     phoneme_f0 = f0_mean(
         f0=f0,
         rate=rate,
         split_second_list=[p.end for p in d.phoneme_list[:-1]],
-        weight=loudness,
+        weight=volume,
     )
     phoneme_f0[numpy.isnan(phoneme_f0)] = 0
 
@@ -160,37 +160,49 @@ class FeatureTargetDataset(Dataset):
         return preprocess(data)
 
 
-def create_dataset(config: DatasetConfig):
+def get_datas(config: DatasetFileConfig):
     f0_paths = [Path(p) for p in sorted(glob(str(config.f0_glob)))]
-    assert len(f0_paths) > 0
+    assert len(f0_paths) > 0, f"f0 files not ehough: {config.f0_glob}"
 
     phoneme_list_paths = [Path(p) for p in sorted(glob(str(config.phoneme_list_glob)))]
-    assert len(phoneme_list_paths) == len(phoneme_list_paths)
+    assert len(phoneme_list_paths) == len(
+        f0_paths
+    ), f"phoneme list files not ehough: {config.phoneme_list_glob}"
 
-    loudness_paths = [Path(p) for p in sorted(glob(str(config.loudness_glob)))]
-    assert len(loudness_paths) == len(loudness_paths)
+    volume_paths = [Path(p) for p in sorted(glob(str(config.volume_glob)))]
+    assert len(volume_paths) == len(
+        f0_paths
+    ), f"volume files not ehough: {config.volume_glob}"
 
     accent_start_paths = [Path(p) for p in sorted(glob(str(config.accent_start_glob)))]
-    assert len(accent_start_paths) == len(accent_start_paths)
+    assert len(accent_start_paths) == len(
+        f0_paths
+    ), f"accent start files not ehough: {config.accent_start_glob}"
 
     accent_end_paths = [Path(p) for p in sorted(glob(str(config.accent_end_glob)))]
-    assert len(accent_end_paths) == len(accent_end_paths)
+    assert len(accent_end_paths) == len(
+        f0_paths
+    ), f"accent end files not ehough: {config.accent_end_glob}"
 
     accent_phrase_start_paths = [
         Path(p) for p in sorted(glob(str(config.accent_phrase_start_glob)))
     ]
-    assert len(accent_phrase_start_paths) == len(accent_phrase_start_paths)
+    assert len(accent_phrase_start_paths) == len(
+        f0_paths
+    ), f"accent phrase start files not ehough: {config.accent_phrase_start_glob}"
 
     accent_phrase_end_paths = [
         Path(p) for p in sorted(glob(str(config.accent_phrase_end_glob)))
     ]
-    assert len(accent_phrase_end_paths) == len(accent_phrase_end_paths)
+    assert len(accent_phrase_end_paths) == len(
+        f0_paths
+    ), f"accent phrase end files not ehough: {config.accent_phrase_end_glob}"
 
     datas = [
         LazyInputData(
             f0_path=f0_path,
             phoneme_list_path=phoneme_list_path,
-            loudness_path=loudness_path,
+            volume_path=volume_path,
             accent_start_path=accent_start_path,
             accent_end_path=accent_end_path,
             accent_phrase_start_path=accent_phrase_start_path,
@@ -199,7 +211,7 @@ def create_dataset(config: DatasetConfig):
         for (
             f0_path,
             phoneme_list_path,
-            loudness_path,
+            volume_path,
             accent_start_path,
             accent_end_path,
             accent_phrase_start_path,
@@ -207,30 +219,34 @@ def create_dataset(config: DatasetConfig):
         ) in zip(
             f0_paths,
             phoneme_list_paths,
-            loudness_paths,
+            volume_paths,
             accent_start_paths,
             accent_end_paths,
             accent_phrase_start_paths,
             accent_phrase_end_paths,
         )
     ]
+    return datas
 
+
+def create_dataset(config: DatasetConfig):
+    datas = get_datas(config.train_file)
     if config.seed is not None:
         numpy.random.RandomState(config.seed).shuffle(datas)
 
     tests, trains = datas[: config.test_num], datas[config.test_num :]
 
+    valids = get_datas(config.valid_file)
+
     def dataset_wrapper(datas, is_eval: bool):
         dataset = FeatureTargetDataset(
             datas=datas,
         )
-        if is_eval:
-            dataset = ConcatDataset([dataset] * config.eval_times_num)
         return dataset
 
     return {
         "train": dataset_wrapper(trains, is_eval=False),
         "test": dataset_wrapper(tests, is_eval=False),
         "eval": dataset_wrapper(tests, is_eval=True),
-        "valid": None,
+        "valid": dataset_wrapper(valids, is_eval=True),
     }

@@ -1,12 +1,13 @@
 from typing import List
 
 import torch
-from accent_estimator.config import NetworkConfig
 from espnet_pytorch_library.conformer.encoder import Encoder
 from espnet_pytorch_library.nets_utils import make_non_pad_mask
 from espnet_pytorch_library.tacotron2.decoder import Postnet
 from torch import Tensor, nn
 from torch.nn.utils.rnn import pad_sequence
+
+from accent_estimator.config import NetworkConfig
 
 
 class Predictor(nn.Module):
@@ -62,12 +63,16 @@ class Predictor(nn.Module):
 
     def forward(
         self,
-        f0_list: List[Tensor],  # [(length, )]
+        f0_list: List[Tensor],  # [(L, )]
     ):
+        """
+        B: batch size
+        L: length
+        """
         length_list = [t.shape[0] for t in f0_list]
 
         length = torch.tensor(length_list, device=f0_list[0].device)
-        h = pad_sequence(f0_list, batch_first=True)  # (batch_size, length, ?)
+        h = pad_sequence(f0_list, batch_first=True)  # (B, L, ?)
 
         h = self.pre(h)
 
@@ -84,6 +89,13 @@ class Predictor(nn.Module):
             [output1[i, :l] for i, l in enumerate(length_list)],
             [output2[i, :l] for i, l in enumerate(length_list)],
         )
+
+    def inference(
+        self,
+        f0_list: List[Tensor],  # [(L, )]
+    ):
+        _, h = self(f0_list=f0_list)
+        return h
 
 
 def create_predictor(config: NetworkConfig):
