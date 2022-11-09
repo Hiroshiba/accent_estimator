@@ -1,9 +1,10 @@
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import torch
 import wandb
 from torch.utils.tensorboard import SummaryWriter
+from typing_extensions import Literal
 
 
 def _flatten_dict(dd, separator="/", prefix=""):
