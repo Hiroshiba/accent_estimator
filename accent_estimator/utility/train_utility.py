@@ -2,8 +2,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import torch
-import wandb
-from torch.utils.tensorboard import SummaryWriter
 from typing_extensions import Literal
 
 
@@ -32,12 +30,18 @@ class Logger(object):
         self.project_name = project_name
         self.output_dir = output_dir
 
-        self.wandb_id = wandb.util.generate_id()
+        self.wandb_id = None
 
         self.wandb = None
         self.tensorboard = None
 
     def _initialize(self):
+        import wandb
+        from torch.utils.tensorboard import SummaryWriter
+
+        if self.wandb_id is None:
+            self.wandb_id = wandb.util.generate_id()
+
         self.wandb = wandb.init(
             id=self.wandb_id,
             project=self.project_category,

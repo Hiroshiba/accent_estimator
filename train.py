@@ -1,5 +1,4 @@
 import argparse
-import multiprocessing
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -7,6 +6,7 @@ import torch
 import yaml
 from torch import Tensor
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from accent_estimator.config import Config
 from accent_estimator.dataset import create_dataset
@@ -51,10 +51,6 @@ def train(config_yaml_path: Path, output_dir: Path):
     # dataset
     datasets = create_dataset(config.dataset)
 
-    num_workers = multiprocessing.cpu_count()
-    if config.train.num_processes is not None:
-        num_workers = config.train.num_processes
-
     def _create_loader(dataset, for_train: bool, for_eval: bool):
         if dataset is None:
             return None
@@ -62,16 +58,20 @@ def train(config_yaml_path: Path, output_dir: Path):
         batch_size = (
             config.train.eval_batch_size if for_eval else config.train.batch_size
         )
-        return DataLoader(
+        loader = DataLoader(
             dataset=dataset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=num_workers,
+            num_workers=config.train.num_processes,
             collate_fn=collate_list,
             pin_memory=config.train.use_gpu,
             drop_last=for_train,
-            timeout=0 if num_workers == 0 else 300,
+            timeout=0 if config.train.num_processes == 0 else 30,
+            persistent_workers=config.train.num_processes > 0,
         )
+        for _ in tqdm(loader, desc="Preloading"):
+            pass
+        return loader
 
     datasets = create_dataset(config.dataset)
     train_loader = _create_loader(datasets["train"], for_train=True, for_eval=False)
@@ -210,7 +210,7 @@ def train(config_yaml_path: Path, output_dir: Path):
                     )
 
                     save_manager.save(
-                        value=summary["valid"]["value"], step=epoch, judge="min"
+                        value=summary["valid"]["value"], step=epoch, judge="max"
                     )
 
             logger.log(summary=summary, step=epoch)
