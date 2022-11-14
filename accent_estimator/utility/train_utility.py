@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import numpy
 import torch
 from typing_extensions import Literal
 
@@ -96,6 +97,9 @@ class SaveManager(object):
         self.top_step_values: List[Tuple[int, float]] = []
 
     def save(self, value: float, step: int, judge: Literal["min", "max"]):
+        if numpy.isnan(value):
+            return
+
         delete_steps: Set[int] = set()
         judged = False
 
@@ -119,6 +123,7 @@ class SaveManager(object):
         else:
             delete_steps.add(self.last_steps.pop(0))
             self.last_steps.append(step)
+            judged = True
 
         # save and delete
         if judged:
