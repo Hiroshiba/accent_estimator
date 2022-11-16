@@ -46,13 +46,27 @@ class Generator(nn.Module):
 
     def forward(
         self,
-        f0_list: List[Union[numpy.ndarray, Tensor]],
+        frame_f0_list: List[Union[numpy.ndarray, Tensor]],
+        frame_phoneme_list: List[Union[numpy.ndarray, Tensor]],
+        mora_f0_list: List[Union[numpy.ndarray, Tensor]],
+        mora_vowel_list: List[Union[numpy.ndarray, Tensor]],
+        mora_consonant_list: List[Union[numpy.ndarray, Tensor]],
     ):
-        f0_list = [to_tensor(f0).to(self.device) for f0 in f0_list]
+        frame_f0_list = [to_tensor(v).to(self.device) for v in frame_f0_list]
+        frame_phoneme_list = [to_tensor(v).to(self.device) for v in frame_phoneme_list]
+        mora_f0_list = [to_tensor(v).to(self.device) for v in mora_f0_list]
+        mora_vowel_list = [to_tensor(v).to(self.device) for v in mora_vowel_list]
+        mora_consonant_list = [
+            to_tensor(v).to(self.device) for v in mora_consonant_list
+        ]
 
         with torch.inference_mode():
             output_list = self.predictor.inference(
-                f0_list=f0_list,
+                frame_f0_list=frame_f0_list,
+                frame_phoneme_list=frame_phoneme_list,
+                mora_f0_list=mora_f0_list,
+                mora_vowel_list=mora_vowel_list,
+                mora_consonant_list=mora_consonant_list,
             )
 
         return [

@@ -1,4 +1,4 @@
-from typing import List
+from typing import Any, Dict, List
 
 import torch
 import torch.nn.functional as F
@@ -27,6 +27,18 @@ class ModelOutput(TypedDict):
     data_num: int
 
 
+def reduce_result(results: List[ModelOutput]):
+    result: Dict[str, Any] = {}
+    sum_data_num = sum([r["data_num"] for r in results])
+    for key in set(results[0].keys()) - {"data_num"}:
+        values = [r[key] * r["data_num"] for r in results]
+        if isinstance(values[0], Tensor):
+            result[key] = torch.stack(values).sum() / sum_data_num
+        else:
+            result[key] = sum(values) / sum_data_num
+    return result
+
+
 def calc(output: Tensor, target: Tensor):
     loss = F.binary_cross_entropy_with_logits(output, target.float())
     tp = ((output >= 0) & (target == 1)).float().sum()
@@ -46,7 +58,11 @@ class Model(nn.Module):
     def forward(self, data: OutputData) -> ModelOutput:
         output_list: List[Tensor]
         _, output_list = self.predictor(
-            f0_list=data["mora_f0"],
+            frame_f0_list=data["frame_f0"],
+            frame_phoneme_list=data["frame_phoneme"],
+            mora_f0_list=data["mora_f0"],
+            mora_vowel_list=data["mora_vowel"],
+            mora_consonant_list=data["mora_consonant"],
         )
 
         output = torch.cat(output_list)

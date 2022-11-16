@@ -31,7 +31,11 @@ class Evaluator(nn.Module):
         device = data["mora_f0"][0].device
 
         output_list: List[GeneratorOutput] = self.generator(
-            f0_list=data["mora_f0"],
+            frame_f0_list=data["frame_f0"],
+            frame_phoneme_list=data["frame_phoneme"],
+            mora_f0_list=data["mora_f0"],
+            mora_vowel_list=data["mora_vowel"],
+            mora_consonant_list=data["mora_consonant"],
         )
 
         target_accent_start = torch.cat(data["accent_start"])

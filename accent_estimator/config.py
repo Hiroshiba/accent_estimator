@@ -20,14 +20,19 @@ class DatasetFileConfig:
 class DatasetConfig:
     train_file: DatasetFileConfig
     valid_file: DatasetFileConfig
+    frame_rate: float
     test_num: int
     seed: int = 0
 
 
 @dataclass
 class NetworkConfig:
+    phoneme_size: int
+    phoneme_embedding_size: int
     hidden_size: int
-    block_num: int
+    encoder_block_num: int
+    attention_heads: int
+    decoder_block_num: int
     post_layer_num: int
 
 
@@ -50,7 +55,7 @@ class TrainConfig:
     weight_initializer: Optional[str] = None
     num_processes: int = 4
     use_gpu: bool = True
-    # use_amp: bool = False
+    use_amp: bool = True
 
 
 @dataclass

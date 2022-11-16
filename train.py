@@ -1,18 +1,17 @@
 import argparse
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 import torch
 import yaml
-from torch import Tensor
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from accent_estimator.config import Config
 from accent_estimator.dataset import create_dataset
 from accent_estimator.evaluator import Evaluator
 from accent_estimator.generator import Generator
-from accent_estimator.model import Model, ModelOutput
+from accent_estimator.model import Model, ModelOutput, reduce_result
 from accent_estimator.network.predictor import create_predictor
 from accent_estimator.utility.pytorch_utility import (
     collate_list,
@@ -58,7 +57,7 @@ def train(config_yaml_path: Path, output_dir: Path):
         batch_size = (
             config.train.eval_batch_size if for_eval else config.train.batch_size
         )
-        loader = DataLoader(
+        return DataLoader(
             dataset=dataset,
             batch_size=batch_size,
             shuffle=True,
@@ -69,9 +68,6 @@ def train(config_yaml_path: Path, output_dir: Path):
             timeout=0 if config.train.num_processes == 0 else 30,
             persistent_workers=config.train.num_processes > 0,
         )
-        for _ in tqdm(loader, desc="Preloading"):
-            pass
-        return loader
 
     datasets = create_dataset(config.dataset)
     train_loader = _create_loader(datasets["train"], for_train=True, for_eval=False)
@@ -81,6 +77,7 @@ def train(config_yaml_path: Path, output_dir: Path):
 
     # optimizer
     optimizer = make_optimizer(config_dict=config.train.optimizer, model=model)
+    scaler = GradScaler(enabled=config.train.use_amp)
 
     # logger
     logger = Logger(
@@ -141,79 +138,68 @@ def train(config_yaml_path: Path, output_dir: Path):
         for batch in train_loader:
             iteration += 1
 
-            batch = to_device(batch, device, non_blocking=True)
-            result: ModelOutput = model(batch)
+            with autocast(enabled=config.train.use_amp):
+                batch = to_device(batch, device, non_blocking=True)
+                result: ModelOutput = model(batch)
 
             optimizer.zero_grad()
-            result["loss"].backward()
-            optimizer.step()
+            scaler.scale(result["loss"]).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             scheduler.step()
 
             train_results.append(detach_cpu(result))
 
-        def reduce_result(results: List[ModelOutput]):
-            result: Dict[str, Any] = {}
-            sum_data_num = sum([r["data_num"] for r in results])
-            for key in set(results[0].keys()) - {"data_num"}:
-                values = [r[key] * r["data_num"] for r in results]
-                if isinstance(values[0], Tensor):
-                    result[key] = torch.stack(values).sum() / sum_data_num
-                else:
-                    result[key] = sum(values) / sum_data_num
-            return result
-
         if epoch % config.train.log_epoch == 0:
             model.eval()
 
-            test_results: List[ModelOutput] = []
-            for batch in test_loader:
-                batch = to_device(batch, device, non_blocking=True)
-                with torch.inference_mode():
+            with torch.inference_mode():
+                test_results: List[ModelOutput] = []
+                for batch in test_loader:
+                    batch = to_device(batch, device, non_blocking=True)
                     result = model(batch)
-                test_results.append(detach_cpu(result))
+                    test_results.append(detach_cpu(result))
 
-            summary = {
-                "train": reduce_result(train_results),
-                "test": reduce_result(test_results),
-                "iteration": iteration,
-                "lr": optimizer.param_groups[0]["lr"],
-            }
+                summary = {
+                    "train": reduce_result(train_results),
+                    "test": reduce_result(test_results),
+                    "iteration": iteration,
+                    "lr": optimizer.param_groups[0]["lr"],
+                }
 
-            if epoch % config.train.eval_epoch == 0:
-                eval_results: List[ModelOutput] = []
-                for batch in eval_loader:
-                    batch = to_device(batch, device, non_blocking=True)
-                    with torch.inference_mode():
+                if epoch % config.train.eval_epoch == 0:
+                    eval_results: List[ModelOutput] = []
+                    for batch in eval_loader:
+                        batch = to_device(batch, device, non_blocking=True)
                         result = evaluator(batch)
-                    eval_results.append(detach_cpu(result))
-                summary["eval"] = reduce_result(eval_results)
+                        eval_results.append(detach_cpu(result))
+                    summary["eval"] = reduce_result(eval_results)
 
-                valid_results: List[ModelOutput] = []
-                for batch in valid_loader:
-                    batch = to_device(batch, device, non_blocking=True)
-                    with torch.inference_mode():
+                    valid_results: List[ModelOutput] = []
+                    for batch in valid_loader:
+                        batch = to_device(batch, device, non_blocking=True)
                         result = evaluator(batch)
-                    valid_results.append(detach_cpu(result))
-                summary["valid"] = reduce_result(valid_results)
+                        valid_results.append(detach_cpu(result))
+                    summary["valid"] = reduce_result(valid_results)
 
-                if epoch % config.train.snapshot_epoch == 0:
-                    torch.save(
-                        {
-                            "model": model.state_dict(),
-                            "optimizer": optimizer.state_dict(),
-                            "logger": logger.state_dict(),
-                            "iteration": iteration,
-                            "epoch": epoch,
-                        },
-                        snapshot_path,
-                    )
+                    if epoch % config.train.snapshot_epoch == 0:
+                        torch.save(
+                            {
+                                "model": model.state_dict(),
+                                "optimizer": optimizer.state_dict(),
+                                "logger": logger.state_dict(),
+                                "iteration": iteration,
+                                "epoch": epoch,
+                            },
+                            snapshot_path,
+                        )
 
-                    save_manager.save(
-                        value=summary["valid"]["value"], step=epoch, judge="max"
-                    )
+                        save_manager.save(
+                            value=summary["valid"]["value"], step=epoch, judge="max"
+                        )
 
-            logger.log(summary=summary, step=epoch)
+                logger.log(summary=summary, step=epoch)
 
             model.train()
 

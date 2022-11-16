@@ -1,12 +1,14 @@
 from dataclasses import dataclass
+from functools import partial
 from glob import glob
 from pathlib import Path
-from typing import List, Sequence, Union
+from typing import List, Optional, Sequence, Union
 
 import numpy
+import torch
 from acoustic_feature_extractor.data.phoneme import OjtPhoneme
 from acoustic_feature_extractor.data.sampling_data import SamplingData
-from torch import Tensor, as_tensor
+from torch import Tensor
 from torch.utils.data import Dataset
 from typing_extensions import TypedDict
 
@@ -30,12 +32,34 @@ def f0_mean(
     indexes = numpy.floor(numpy.array(split_second_list) * rate).astype(int)
     output = numpy.array(
         [
-            numpy.sum(a[~numpy.isnan(a)] * b[~numpy.isnan(a)])
-            / numpy.sum(b[~numpy.isnan(a)])
+            numpy.sum(a[a > 0] * b[a > 0]) / numpy.sum(b[a > 0])
             for a, b in zip(numpy.split(f0, indexes), numpy.split(weight, indexes))
-        ]
+        ],
+        dtype=f0.dtype,
     )
     return output
+
+
+def make_phoneme_array(phoneme_list: List[OjtPhoneme], rate: float, length: int):
+    to_index = lambda x: int(x * rate)
+    phoneme = numpy.zeros(to_index(phoneme_list[-1].end + 1), dtype=numpy.int32)
+    for p in phoneme_list:
+        phoneme[to_index(p.start) : to_index(p.end)] = p.phoneme_id
+    if len(phoneme) < length:
+        phoneme = numpy.pad(phoneme, (0, length - len(phoneme)), "edge")
+    return phoneme[:length]
+
+
+def split_mora(phoneme_list: List[OjtPhoneme]):
+    vowel_indexes = [
+        i for i, p in enumerate(phoneme_list) if p.phoneme in mora_phoneme_list
+    ]
+    vowel_phoneme_list = [phoneme_list[i] for i in vowel_indexes]
+    consonant_phoneme_list: List[Optional[OjtPhoneme]] = [None] + [
+        None if post - prev == 1 else phoneme_list[post - 1]
+        for prev, post in zip(vowel_indexes[:-1], vowel_indexes[1:])
+    ]
+    return consonant_phoneme_list, vowel_phoneme_list
 
 
 @dataclass
@@ -82,11 +106,17 @@ class OutputData(TypedDict):
     accent_end: Tensor
     accent_phrase_start: Tensor
     accent_phrase_end: Tensor
-    phoneme_f0: Tensor
+    frame_f0: Tensor
+    frame_phoneme: Tensor
     mora_f0: Tensor
+    mora_vowel: Tensor
+    mora_consonant: Tensor
 
 
-def preprocess(d: InputData):
+def preprocess(
+    d: InputData,
+    frame_rate: float,
+):
     mora_indexes = [
         i for i, p in enumerate(d.phoneme_list) if p.phoneme in mora_phoneme_list
     ]
@@ -96,49 +126,47 @@ def preprocess(d: InputData):
     accent_phrase_start = numpy.array([d.accent_phrase_start[i] for i in mora_indexes])
     accent_phrase_end = numpy.array([d.accent_phrase_end[i] for i in mora_indexes])
 
-    rate = d.f0.rate
-    f0 = d.f0.array
-    f0[f0 == 0] = numpy.nan
+    f0 = d.f0.array.astype(numpy.float32)
+    volume = d.volume.resample(frame_rate)
+    phoneme = make_phoneme_array(
+        phoneme_list=d.phoneme_list, rate=frame_rate, length=len(f0)
+    )
 
-    volume = d.volume.resample(rate)
-
-    min_length = min(len(f0), len(volume))
+    min_length = min(len(f0), len(volume), len(phoneme))
     f0 = f0[:min_length]
     volume = volume[:min_length]
+    phoneme = phoneme[:min_length]
 
-    phoneme_f0 = f0_mean(
+    mora_f0 = f0_mean(
         f0=f0,
-        rate=rate,
-        split_second_list=[p.end for p in d.phoneme_list[:-1]],
+        rate=frame_rate,
+        split_second_list=[
+            p.end for p in d.phoneme_list[:-1] if p.phoneme in mora_phoneme_list
+        ],
         weight=volume,
     )
-    phoneme_f0[numpy.isnan(phoneme_f0)] = 0
+    mora_f0[numpy.isnan(mora_f0)] = 0
 
-    phoneme_length = numpy.array([p.end - p.start for p in d.phoneme_list])
-    mora_f0 = numpy.array([], dtype=numpy.float32)
-    for i, diff in enumerate(numpy.diff(numpy.r_[0, mora_indexes])):
-        index = mora_indexes[i]
-        if diff == 1 or d.phoneme_list[index - 1].phoneme not in voiced_phoneme_list:
-            mora_f0 = numpy.r_[mora_f0, phoneme_f0[index]]
-        else:
-            a = phoneme_f0[index - 1] * phoneme_length[index - 1]
-            b = phoneme_f0[index] * phoneme_length[index]
-            mora_f0 = numpy.r_[
-                mora_f0,
-                (a + b) / (phoneme_length[index] + phoneme_length[index - 1]),
-            ]
+    consonant_phoneme_list, vowel_phoneme_list = split_mora(d.phoneme_list)
+    mora_vowel = numpy.array([p.phoneme_id for p in vowel_phoneme_list])
+    mora_consonant = numpy.array(
+        [p.phoneme_id if p is not None else -1 for p in consonant_phoneme_list]
+    )
 
     # mora_f0[
     #     [d.phoneme_list[i].phoneme in unvoiced_mora_phoneme_list for i in mora_indexes]
     # ] = 0
 
     output_data = OutputData(
-        accent_start=as_tensor(accent_start),
-        accent_end=as_tensor(accent_end),
-        accent_phrase_start=as_tensor(accent_phrase_start),
-        accent_phrase_end=as_tensor(accent_phrase_end),
-        phoneme_f0=as_tensor(phoneme_f0).reshape(-1, 1),
-        mora_f0=as_tensor(mora_f0).reshape(-1, 1),
+        accent_start=torch.from_numpy(accent_start),
+        accent_end=torch.from_numpy(accent_end),
+        accent_phrase_start=torch.from_numpy(accent_phrase_start),
+        accent_phrase_end=torch.from_numpy(accent_phrase_end),
+        frame_f0=torch.from_numpy(f0).reshape(-1, 1),
+        frame_phoneme=torch.from_numpy(phoneme),
+        mora_f0=torch.from_numpy(mora_f0).reshape(-1, 1),
+        mora_vowel=torch.from_numpy(mora_vowel),
+        mora_consonant=torch.from_numpy(mora_consonant),
     )
     return output_data
 
@@ -147,8 +175,13 @@ class FeatureTargetDataset(Dataset):
     def __init__(
         self,
         datas: Sequence[Union[InputData, LazyInputData]],
+        frame_rate: float,
     ):
         self.datas = datas
+        self.preprocessor = partial(
+            preprocess,
+            frame_rate=frame_rate,
+        )
 
     def __len__(self):
         return len(self.datas)
@@ -157,7 +190,7 @@ class FeatureTargetDataset(Dataset):
         data = self.datas[i]
         if isinstance(data, LazyInputData):
             data = data.generate()
-        return preprocess(data)
+        return self.preprocessor(data)
 
 
 def get_datas(config: DatasetFileConfig):
@@ -241,6 +274,7 @@ def create_dataset(config: DatasetConfig):
     def dataset_wrapper(datas, is_eval: bool):
         dataset = FeatureTargetDataset(
             datas=datas,
+            frame_rate=config.frame_rate,
         )
         return dataset
 
