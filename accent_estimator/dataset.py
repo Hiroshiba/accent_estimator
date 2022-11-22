@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from functools import partial
 from glob import glob
+from itertools import chain, groupby
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
 
@@ -259,17 +260,29 @@ def get_datas(config: DatasetFileConfig):
             accent_phrase_end_paths,
         )
     ]
-    return datas
+
+    # 同じ音素列のものをまとめる
+    # ファイル名が`{話者}_{コーパス種}_{index}`の形式であることを前提としている
+    def keyfunc(d: LazyInputData):
+        return "_".join(d.f0_path.stem.split("_")[-2:])
+
+    datas = sorted(datas, key=keyfunc)
+    grouped_datas = {k: list(g) for k, g in groupby(datas, key=keyfunc)}
+    return grouped_datas
 
 
 def create_dataset(config: DatasetConfig):
-    datas = get_datas(config.train_file)
+    grouped_datas = get_datas(config.train_file)
+    keys = sorted(grouped_datas.keys())
     if config.seed is not None:
-        numpy.random.RandomState(config.seed).shuffle(datas)
+        numpy.random.RandomState(config.seed).shuffle(keys)
 
-    tests, trains = datas[: config.test_num], datas[config.test_num :]
+    tests_keys, trains_keys = keys[: config.test_num], keys[config.test_num :]
+    trains = list(chain.from_iterable(grouped_datas[k] for k in trains_keys))
+    tests = list(chain.from_iterable(grouped_datas[k] for k in tests_keys))
 
-    valids = get_datas(config.valid_file)
+    grouped_valids = get_datas(config.valid_file)
+    valids = list(chain.from_iterable(grouped_valids.values()))
 
     def dataset_wrapper(datas, is_eval: bool):
         dataset = FeatureTargetDataset(
