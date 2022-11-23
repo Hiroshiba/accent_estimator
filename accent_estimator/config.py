@@ -21,6 +21,10 @@ class DatasetConfig:
     train_file: DatasetFileConfig
     valid_file: DatasetFileConfig
     frame_rate: float
+    frame_phoneme_mask_max_second: float
+    frame_phoneme_mask_rate: float  # 秒あたりいくつあるか
+    mora_phoneme_mask_max_length: int
+    mora_phoneme_mask_rate: float  # モーラあたりいくつあるか
     test_num: int
     seed: int = 0
 

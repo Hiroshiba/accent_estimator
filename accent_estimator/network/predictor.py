@@ -25,11 +25,11 @@ class Predictor(nn.Module):
         super().__init__()
 
         self.encoder_phoneme_embedder = nn.Embedding(
-            num_embeddings=phoneme_size,
+            num_embeddings=phoneme_size + 1,  # with empty
             embedding_dim=phoneme_embedding_size,
         )
         self.decoder_phoneme_embedder = nn.Embedding(
-            num_embeddings=phoneme_size + 1,  # empty consonant
+            num_embeddings=phoneme_size + 1,  # with empty
             embedding_dim=phoneme_embedding_size,
             padding_idx=0,
         )
@@ -106,7 +106,7 @@ class Predictor(nn.Module):
         frame_length_list = [t.shape[0] for t in frame_f0_list]
         fh = pad_sequence(frame_f0_list, batch_first=True)  # (B, fL, ?)
         fp = pad_sequence(frame_phoneme_list, batch_first=True)  # (B, fL)
-        fp = self.encoder_phoneme_embedder(fp)  # (B, fL, ?)
+        fp = self.encoder_phoneme_embedder(fp + 1)  # (B, fL, ?)
         fh = torch.cat((fh, fp), dim=2)  # (B, fL, ?)
 
         frame_mask = self._mask(torch.tensor(frame_length_list, device=device))

@@ -16,12 +16,6 @@ from typing_extensions import TypedDict
 from accent_estimator.config import DatasetConfig, DatasetFileConfig
 
 mora_phoneme_list = ["a", "i", "u", "e", "o", "I", "U", "E", "N", "cl", "pau"]
-voiced_phoneme_list = (
-    ["a", "i", "u", "e", "o", "A", "I", "U", "E", "O", "N"]
-    + ["n", "m", "y", "r", "w", "g", "z", "j", "d", "b"]
-    + ["ny", "my", "ry", "gy", "by"]
-)
-unvoiced_mora_phoneme_list = ["A", "I", "U", "E", "O", "cl", "pau"]
 
 
 def f0_mean(
@@ -117,6 +111,10 @@ class OutputData(TypedDict):
 def preprocess(
     d: InputData,
     frame_rate: float,
+    frame_phoneme_mask_max_second: float,
+    frame_phoneme_mask_rate: float,
+    mora_phoneme_mask_max_length: int,
+    mora_phoneme_mask_rate: float,
 ):
     mora_indexes = [
         i for i, p in enumerate(d.phoneme_list) if p.phoneme in mora_phoneme_list
@@ -154,9 +152,24 @@ def preprocess(
         [p.phoneme_id if p is not None else -1 for p in consonant_phoneme_list]
     )
 
-    # mora_f0[
-    #     [d.phoneme_list[i].phoneme in unvoiced_mora_phoneme_list for i in mora_indexes]
-    # ] = 0
+    if frame_phoneme_mask_max_second > 0 and frame_phoneme_mask_rate > 0:
+        mask_num = int(round(frame_phoneme_mask_rate * len(phoneme) / frame_rate))
+        mask_max_length = min(
+            int(frame_rate * frame_phoneme_mask_max_second), len(phoneme)
+        )
+        for _ in range(mask_num):
+            mask_length = numpy.random.randint(mask_max_length)
+            mask_offset = numpy.random.randint(len(phoneme) - mask_length + 1)
+            phoneme[mask_offset : mask_offset + mask_length] = -1
+
+    if mora_phoneme_mask_max_length > 0 and mora_phoneme_mask_rate > 0:
+        mask_num = int(round(mora_phoneme_mask_rate * len(mora_vowel)))
+        mask_max_length = min(mora_phoneme_mask_max_length, len(mora_vowel))
+        for _ in range(mask_num):
+            mask_length = numpy.random.randint(mask_max_length)
+            mask_offset = numpy.random.randint(len(mora_vowel) - mask_length + 1)
+            mora_vowel[mask_offset : mask_offset + mask_length] = -1
+            mora_consonant[mask_offset : mask_offset + mask_length] = -1
 
     output_data = OutputData(
         accent_start=torch.from_numpy(accent_start),
@@ -177,11 +190,19 @@ class FeatureTargetDataset(Dataset):
         self,
         datas: Sequence[Union[InputData, LazyInputData]],
         frame_rate: float,
+        frame_phoneme_mask_max_second: float,
+        frame_phoneme_mask_rate: float,
+        mora_phoneme_mask_max_length: int,
+        mora_phoneme_mask_rate: float,
     ):
         self.datas = datas
         self.preprocessor = partial(
             preprocess,
             frame_rate=frame_rate,
+            frame_phoneme_mask_max_second=frame_phoneme_mask_max_second,
+            frame_phoneme_mask_rate=frame_phoneme_mask_rate,
+            mora_phoneme_mask_max_length=mora_phoneme_mask_max_length,
+            mora_phoneme_mask_rate=mora_phoneme_mask_rate,
         )
 
     def __len__(self):
@@ -284,16 +305,28 @@ def create_dataset(config: DatasetConfig):
     grouped_valids = get_datas(config.valid_file)
     valids = list(chain.from_iterable(grouped_valids.values()))
 
-    def dataset_wrapper(datas, is_eval: bool):
+    def dataset_wrapper(datas, is_test: bool):
         dataset = FeatureTargetDataset(
             datas=datas,
             frame_rate=config.frame_rate,
+            frame_phoneme_mask_max_second=(
+                config.frame_phoneme_mask_max_second if not is_test else 0
+            ),
+            frame_phoneme_mask_rate=(
+                config.frame_phoneme_mask_rate if not is_test else 0
+            ),
+            mora_phoneme_mask_max_length=(
+                config.mora_phoneme_mask_max_length if not is_test else 0
+            ),
+            mora_phoneme_mask_rate=(
+                config.mora_phoneme_mask_rate if not is_test else 0
+            ),
         )
         return dataset
 
     return {
-        "train": dataset_wrapper(trains, is_eval=False),
-        "test": dataset_wrapper(tests, is_eval=False),
-        "eval": dataset_wrapper(tests, is_eval=True),
-        "valid": dataset_wrapper(valids, is_eval=True),
+        "train": dataset_wrapper(trains, is_test=False),
+        "test": dataset_wrapper(tests, is_test=True),
+        "eval": dataset_wrapper(tests, is_test=True),
+        "valid": dataset_wrapper(valids, is_test=True),
     }
