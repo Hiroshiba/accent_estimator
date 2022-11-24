@@ -37,12 +37,21 @@ def f0_mean(
 
 def make_phoneme_array(phoneme_list: List[OjtPhoneme], rate: float, length: int):
     to_index = lambda x: int(x * rate)
-    phoneme = numpy.zeros(to_index(phoneme_list[-1].end + 1), dtype=numpy.int32)
+    phoneme = numpy.zeros(length, dtype=numpy.int32)
     for p in phoneme_list:
         phoneme[to_index(p.start) : to_index(p.end)] = p.phoneme_id
-    if len(phoneme) < length:
-        phoneme = numpy.pad(phoneme, (0, length - len(phoneme)), "edge")
     return phoneme[:length]
+
+
+def make_index_array(split_second_list: List[float], rate: float, length: int):
+    to_index = lambda x: int(x * rate)
+    split_second_list = numpy.r_[0, split_second_list]
+    array = numpy.ones(length, dtype=numpy.int64) * (len(split_second_list) - 1)
+    for i in range(len(split_second_list) - 1):
+        array[to_index(split_second_list[i]) : to_index(split_second_list[i + 1])] = i
+    if len(array) < length:
+        array = numpy.pad(array, (0, length - len(array)), "edge")
+    return array[:length]
 
 
 def split_mora(phoneme_list: List[OjtPhoneme]):
@@ -103,6 +112,7 @@ class OutputData(TypedDict):
     accent_phrase_end: Tensor
     frame_f0: Tensor
     frame_phoneme: Tensor
+    frame_mora_index: Tensor
     mora_f0: Tensor
     mora_vowel: Tensor
     mora_consonant: Tensor
@@ -125,23 +135,29 @@ def preprocess(
     accent_phrase_start = numpy.array([d.accent_phrase_start[i] for i in mora_indexes])
     accent_phrase_end = numpy.array([d.accent_phrase_end[i] for i in mora_indexes])
 
+    mora_split_second_list = [
+        p.end for p in d.phoneme_list[:-1] if p.phoneme in mora_phoneme_list
+    ]
+
     f0 = d.f0.array.astype(numpy.float32)
     volume = d.volume.resample(frame_rate)
     phoneme = make_phoneme_array(
         phoneme_list=d.phoneme_list, rate=frame_rate, length=len(f0)
     )
+    mora_index = make_index_array(
+        split_second_list=mora_split_second_list, rate=frame_rate, length=len(f0)
+    )
 
-    min_length = min(len(f0), len(volume), len(phoneme))
+    min_length = min(len(f0), len(volume), len(phoneme), len(mora_index))
     f0 = f0[:min_length]
     volume = volume[:min_length]
     phoneme = phoneme[:min_length]
+    mora_index = mora_index[:min_length]
 
     mora_f0 = f0_mean(
         f0=f0,
         rate=frame_rate,
-        split_second_list=[
-            p.end for p in d.phoneme_list[:-1] if p.phoneme in mora_phoneme_list
-        ],
+        split_second_list=mora_split_second_list,
         weight=volume,
     )
     mora_f0[numpy.isnan(mora_f0)] = 0
@@ -178,6 +194,7 @@ def preprocess(
         accent_phrase_end=torch.from_numpy(accent_phrase_end),
         frame_f0=torch.from_numpy(f0).reshape(-1, 1),
         frame_phoneme=torch.from_numpy(phoneme),
+        frame_mora_index=torch.from_numpy(mora_index),
         mora_f0=torch.from_numpy(mora_f0).reshape(-1, 1),
         mora_vowel=torch.from_numpy(mora_vowel),
         mora_consonant=torch.from_numpy(mora_consonant),

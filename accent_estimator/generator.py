@@ -48,12 +48,16 @@ class Generator(nn.Module):
         self,
         frame_f0_list: List[Union[numpy.ndarray, Tensor]],
         frame_phoneme_list: List[Union[numpy.ndarray, Tensor]],
+        frame_mora_index_list: List[Union[numpy.ndarray, Tensor]],
         mora_f0_list: List[Union[numpy.ndarray, Tensor]],
         mora_vowel_list: List[Union[numpy.ndarray, Tensor]],
         mora_consonant_list: List[Union[numpy.ndarray, Tensor]],
     ):
         frame_f0_list = [to_tensor(v).to(self.device) for v in frame_f0_list]
         frame_phoneme_list = [to_tensor(v).to(self.device) for v in frame_phoneme_list]
+        frame_mora_index_list = [
+            to_tensor(v).to(self.device) for v in frame_mora_index_list
+        ]
         mora_f0_list = [to_tensor(v).to(self.device) for v in mora_f0_list]
         mora_vowel_list = [to_tensor(v).to(self.device) for v in mora_vowel_list]
         mora_consonant_list = [
@@ -64,6 +68,7 @@ class Generator(nn.Module):
             output_list = self.predictor.inference(
                 frame_f0_list=frame_f0_list,
                 frame_phoneme_list=frame_phoneme_list,
+                frame_mora_index_list=frame_mora_index_list,
                 mora_f0_list=mora_f0_list,
                 mora_vowel_list=mora_vowel_list,
                 mora_consonant_list=mora_consonant_list,

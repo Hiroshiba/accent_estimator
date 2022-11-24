@@ -9,6 +9,7 @@ from torch import Tensor, nn
 from torch.nn.utils.rnn import pad_sequence
 
 from accent_estimator.config import NetworkConfig
+from accent_estimator.network.index_positional_encoder import IndexPositionalEncoder
 
 
 class Predictor(nn.Module):
@@ -24,14 +25,20 @@ class Predictor(nn.Module):
     ):
         super().__init__()
 
+        # encoder (frame level)
         self.encoder_phoneme_embedder = nn.Embedding(
             num_embeddings=phoneme_size + 1,  # with empty
             embedding_dim=phoneme_embedding_size,
         )
-        self.decoder_phoneme_embedder = nn.Embedding(
-            num_embeddings=phoneme_size + 1,  # with empty
-            embedding_dim=phoneme_embedding_size,
-            padding_idx=0,
+
+        self.pre_encoder = nn.Sequential(
+            nn.Linear(1 + phoneme_embedding_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.Dropout(0.1),
+        )
+        self.mora_positional_encoder = IndexPositionalEncoder(
+            d_model=hidden_size,
+            dropout_rate=0.1,
         )
 
         self.encoder = Encoder(
@@ -40,7 +47,7 @@ class Predictor(nn.Module):
             attention_heads=attention_heads,
             linear_units=hidden_size * 4,
             num_blocks=encoder_block_num,
-            input_layer="linear",
+            input_layer=None,
             dropout_rate=0.1,
             positional_dropout_rate=0.1,
             attention_dropout_rate=0.1,
@@ -53,6 +60,13 @@ class Predictor(nn.Module):
             activation_type="swish",
             use_cnn_module=True,
             cnn_module_kernel=31,
+        )
+
+        # decoder (mora level)
+        self.decoder_phoneme_embedder = nn.Embedding(
+            num_embeddings=phoneme_size + 1,  # with empty
+            embedding_dim=phoneme_embedding_size,
+            padding_idx=0,
         )
 
         self.decoder = Decoder(
@@ -92,6 +106,7 @@ class Predictor(nn.Module):
         self,
         frame_f0_list: List[Tensor],  # [(fL, 1)]
         frame_phoneme_list: List[Tensor],  # [(fL, )]
+        frame_mora_index_list: List[Tensor],  # [(fL, )]
         mora_f0_list: List[Tensor],  # [(mL, 1)]
         mora_vowel_list: List[Tensor],  # [(mL, )]
         mora_consonant_list: List[Tensor],  # [(mL, )]
@@ -102,12 +117,17 @@ class Predictor(nn.Module):
         mL: mora length
         """
         device = frame_f0_list[0].device
+        batch_size = len(frame_f0_list)
 
         frame_length_list = [t.shape[0] for t in frame_f0_list]
         fh = pad_sequence(frame_f0_list, batch_first=True)  # (B, fL, ?)
         fp = pad_sequence(frame_phoneme_list, batch_first=True)  # (B, fL)
         fp = self.encoder_phoneme_embedder(fp + 1)  # (B, fL, ?)
         fh = torch.cat((fh, fp), dim=2)  # (B, fL, ?)
+
+        fh = self.pre_encoder(fh)  # (B, fL, ?)
+        fmi = pad_sequence(frame_mora_index_list, batch_first=True)  # (B, fL)
+        fh = self.mora_positional_encoder(fh, index=fmi)  # (B, fL, ?)
 
         frame_mask = self._mask(torch.tensor(frame_length_list, device=device))
         fh, _ = self.encoder(fh, frame_mask)
@@ -139,6 +159,7 @@ class Predictor(nn.Module):
         self,
         frame_f0_list: List[Tensor],  # [(fL, 1)]
         frame_phoneme_list: List[Tensor],  # [(fL, 1)]
+        frame_mora_index_list: List[Tensor],  # [(fL, )]
         mora_f0_list: List[Tensor],  # [(mL, 1)]
         mora_vowel_list: List[Tensor],  # [(mL, 1)]
         mora_consonant_list: List[Tensor],  # [(mL, 1)]
@@ -146,6 +167,7 @@ class Predictor(nn.Module):
         _, h = self(
             frame_f0_list=frame_f0_list,
             frame_phoneme_list=frame_phoneme_list,
+            frame_mora_index_list=frame_mora_index_list,
             mora_f0_list=mora_f0_list,
             mora_vowel_list=mora_vowel_list,
             mora_consonant_list=mora_consonant_list,

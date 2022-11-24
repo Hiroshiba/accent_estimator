@@ -60,6 +60,7 @@ class Model(nn.Module):
         _, output_list = self.predictor(
             frame_f0_list=data["frame_f0"],
             frame_phoneme_list=data["frame_phoneme"],
+            frame_mora_index_list=data["frame_mora_index"],
             mora_f0_list=data["mora_f0"],
             mora_vowel_list=data["mora_vowel"],
             mora_consonant_list=data["mora_consonant"],
