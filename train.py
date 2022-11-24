@@ -97,6 +97,7 @@ def train(config_yaml_path: Path, output_dir: Path):
 
         model.load_state_dict(snapshot["model"])
         optimizer.load_state_dict(snapshot["optimizer"])
+        scaler.load_state_dict(snapshot["scaler"])
         logger.load_state_dict(snapshot["logger"])
 
         iteration = snapshot["iteration"]
@@ -188,6 +189,7 @@ def train(config_yaml_path: Path, output_dir: Path):
                             {
                                 "model": model.state_dict(),
                                 "optimizer": optimizer.state_dict(),
+                                "scaler": scaler.state_dict(),
                                 "logger": logger.state_dict(),
                                 "iteration": iteration,
                                 "epoch": epoch,
