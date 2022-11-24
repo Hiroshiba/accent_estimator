@@ -31,11 +31,6 @@ class Predictor(nn.Module):
             embedding_dim=phoneme_embedding_size,
         )
 
-        self.pre_encoder = nn.Sequential(
-            nn.Linear(1 + phoneme_embedding_size, hidden_size),
-            nn.LayerNorm(hidden_size),
-            nn.Dropout(0.1),
-        )
         self.mora_positional_encoder = IndexPositionalEncoder(
             d_model=hidden_size,
             dropout_rate=0.1,
@@ -47,7 +42,7 @@ class Predictor(nn.Module):
             attention_heads=attention_heads,
             linear_units=hidden_size * 4,
             num_blocks=encoder_block_num,
-            input_layer=None,
+            input_layer="linear",
             dropout_rate=0.1,
             positional_dropout_rate=0.1,
             attention_dropout_rate=0.1,
@@ -117,7 +112,6 @@ class Predictor(nn.Module):
         mL: mora length
         """
         device = frame_f0_list[0].device
-        batch_size = len(frame_f0_list)
 
         frame_length_list = [t.shape[0] for t in frame_f0_list]
         fh = pad_sequence(frame_f0_list, batch_first=True)  # (B, fL, ?)
@@ -125,12 +119,11 @@ class Predictor(nn.Module):
         fp = self.encoder_phoneme_embedder(fp + 1)  # (B, fL, ?)
         fh = torch.cat((fh, fp), dim=2)  # (B, fL, ?)
 
-        fh = self.pre_encoder(fh)  # (B, fL, ?)
-        fmi = pad_sequence(frame_mora_index_list, batch_first=True)  # (B, fL)
-        fh = self.mora_positional_encoder(fh, index=fmi)  # (B, fL, ?)
-
         frame_mask = self._mask(torch.tensor(frame_length_list, device=device))
         fh, _ = self.encoder(fh, frame_mask)
+
+        fmi = pad_sequence(frame_mora_index_list, batch_first=True)  # (B, fL)
+        fh = self.mora_positional_encoder(fh, index=fmi)  # (B, fL, ?)
 
         mora_length_list = [t.shape[0] for t in mora_f0_list]
         mh = pad_sequence(mora_f0_list, batch_first=True)  # (B, mL, ?)
