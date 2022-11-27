@@ -139,7 +139,7 @@ def preprocess(
         p.end for p in d.phoneme_list[:-1] if p.phoneme in mora_phoneme_list
     ]
 
-    f0 = d.f0.array.astype(numpy.float32)
+    f0 = d.f0.resample(frame_rate).astype(numpy.float32)
     volume = d.volume.resample(frame_rate)
     phoneme = make_phoneme_array(
         phoneme_list=d.phoneme_list, rate=frame_rate, length=len(f0)
@@ -149,6 +149,11 @@ def preprocess(
     )
 
     min_length = min(len(f0), len(volume), len(phoneme), len(mora_index))
+    assert abs(min_length - len(f0)) < frame_rate // 5
+    assert abs(min_length - len(volume)) < frame_rate // 5
+    assert abs(min_length - len(phoneme)) < frame_rate // 5
+    assert abs(min_length - len(mora_index)) < frame_rate // 5
+
     f0 = f0[:min_length]
     volume = volume[:min_length]
     phoneme = phoneme[:min_length]
