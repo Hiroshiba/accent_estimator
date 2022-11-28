@@ -42,7 +42,7 @@ class NetworkConfig:
 
 @dataclass
 class ModelConfig:
-    pass
+    disable_mora_f0: bool
 
 
 @dataclass

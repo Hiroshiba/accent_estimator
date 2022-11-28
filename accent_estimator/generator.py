@@ -65,6 +65,9 @@ class Generator(nn.Module):
         ]
 
         with torch.inference_mode():
+            if self.config.model.disable_mora_f0:
+                mora_f0_list = [torch.zeros_like(v) for v in mora_f0_list]
+
             output_list = self.predictor.inference(
                 frame_f0_list=frame_f0_list,
                 frame_phoneme_list=frame_phoneme_list,

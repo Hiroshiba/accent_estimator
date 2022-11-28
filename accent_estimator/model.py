@@ -56,6 +56,10 @@ class Model(nn.Module):
         self.predictor = predictor
 
     def forward(self, data: OutputData) -> ModelOutput:
+        if self.model_config.disable_mora_f0:
+            for d in data["mora_f0"]:
+                d.fill_(0)
+
         output_list: List[Tensor]
         _, output_list = self.predictor(
             frame_f0_list=data["frame_f0"],
