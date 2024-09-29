@@ -4,5 +4,3 @@ torch
 torch_optimizer
 tensorboard
 wandb
-git+https://github.com/Hiroshiba/acoustic_feature_extractor
-git+https://github.com/Hiroshiba/espnet_pytorch_library@fe0183b78b3495324e6769e340c3bd80f91e7f8e

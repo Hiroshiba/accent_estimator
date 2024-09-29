@@ -1,6 +1,5 @@
-import warnings
 from copy import deepcopy
-from typing import Any, Callable, Dict, Union
+from typing import Any, Callable, Dict
 
 import numpy
 import torch
@@ -55,6 +54,9 @@ def make_optimizer(config_dict: Dict[str, Any], model: nn.Module):
         optimizer = torch_optimizer.Ranger(model.parameters(), **cp)
     elif n == "sgd":
         optimizer = optim.SGD(model.parameters(), **cp)
+    elif n == "true_adamw":
+        cp["weight_decay"] /= cp["lr"]
+        optimizer = optim.AdamW(model.parameters(), **cp)
     else:
         raise ValueError(n)
 

@@ -1,10 +1,11 @@
 from typing import List
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 from typing_extensions import TypedDict
 
-from accent_estimator.dataset import OutputData
+from accent_estimator.dataset import DatasetOutput
 from accent_estimator.generator import Generator, GeneratorOutput
 from accent_estimator.model import calc
 
@@ -27,47 +28,29 @@ class Evaluator(nn.Module):
         super().__init__()
         self.generator = generator
 
-    def forward(self, data: OutputData) -> EvaluatorOutput:
-        device = data["mora_f0"][0].device
-
+    def forward(self, data: DatasetOutput) -> EvaluatorOutput:
         output_list: List[GeneratorOutput] = self.generator(
-            frame_f0_list=data["frame_f0"],
-            frame_phoneme_list=data["frame_phoneme"],
-            frame_mora_index_list=data["frame_mora_index"],
-            mora_f0_list=data["mora_f0"],
-            mora_vowel_list=data["mora_vowel"],
-            mora_consonant_list=data["mora_consonant"],
+            vowel_list=data["vowel"],
+            feature_list=data["feature"],
         )
 
-        target_accent_start = torch.cat(data["accent_start"])
-        target_accent_end = torch.cat(data["accent_end"])
-        target_accent_phrase_start = torch.cat(data["accent_phrase_start"])
-        target_accent_phrase_end = torch.cat(data["accent_phrase_end"])
+        # output = torch.cat(output_list)
+        accent_start = torch.cat([o["accent_start"] for o in output_list])
+        accent_end = torch.cat([o["accent_start"] for o in output_list])
+        accent_phrase_start = torch.cat([o["accent_start"] for o in output_list])
+        accent_phrase_end = torch.cat([o["accent_start"] for o in output_list])
 
-        output_accent_start = torch.cat(
-            [output["accent_start"] for output in output_list]
-        ).to(device)
-        output_accent_end = torch.cat(
-            [output["accent_end"] for output in output_list]
-        ).to(device)
-        output_accent_phrase_start = torch.cat(
-            [output["accent_phrase_start"] for output in output_list]
-        ).to(device)
-        output_accent_phrase_end = torch.cat(
-            [output["accent_phrase_end"] for output in output_list]
-        ).to(device)
+        target_accent = torch.cat(data["accent"])
 
-        _, precision_accent_start, recall_accent_start = calc(
-            output_accent_start, target_accent_start
+        precision_accent_start, recall_accent_start = calc(
+            accent_start, target_accent[:, 0]
         )
-        _, precision_accent_end, recall_accent_end = calc(
-            output_accent_end, target_accent_end
+        precision_accent_end, recall_accent_end = calc(accent_end, target_accent[:, 1])
+        precision_accent_phrase_start, recall_accent_phrase_start = calc(
+            accent_phrase_start, target_accent[:, 2]
         )
-        _, precision_accent_phrase_start, recall_accent_phrase_start = calc(
-            output_accent_phrase_start, target_accent_phrase_start
-        )
-        _, precision_accent_phrase_end, recall_accent_phrase_end = calc(
-            output_accent_phrase_end, target_accent_phrase_end
+        precision_accent_phrase_end, recall_accent_phrase_end = calc(
+            accent_phrase_end, target_accent[:, 3]
         )
 
         value = (

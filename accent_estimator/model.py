@@ -6,16 +6,12 @@ from torch import Tensor, nn
 from typing_extensions import TypedDict
 
 from accent_estimator.config import ModelConfig
-from accent_estimator.dataset import OutputData
+from accent_estimator.dataset import DatasetOutput
 from accent_estimator.network.predictor import Predictor
 
 
 class ModelOutput(TypedDict):
     loss: Tensor
-    loss_accent_start: Tensor
-    loss_accent_end: Tensor
-    loss_accent_phrase_start: Tensor
-    loss_accent_phrase_end: Tensor
     precision_accent_start: Tensor
     precision_accent_end: Tensor
     precision_accent_phrase_start: Tensor
@@ -40,13 +36,12 @@ def reduce_result(results: List[ModelOutput]):
 
 
 def calc(output: Tensor, target: Tensor):
-    loss = F.binary_cross_entropy_with_logits(output, target.float())
-    tp = ((output >= 0) & (target == 1)).float().sum()
-    fp = ((output >= 0) & (target == 0)).float().sum()
-    fn = ((output < 0) & (target == 1)).float().sum()
+    tp = ((output[:, 1] > output[:, 0]) & (target == 1)).sum()
+    fp = ((output[:, 1] > output[:, 0]) & (target == 0)).sum()
+    fn = ((output[:, 1] <= output[:, 0]) & (target == 1)).sum()
     precision = tp / (tp + fp)
     recall = tp / (tp + fn)
-    return loss, precision, recall
+    return precision, recall
 
 
 class Model(nn.Module):
@@ -55,62 +50,35 @@ class Model(nn.Module):
         self.model_config = model_config
         self.predictor = predictor
 
-    def forward(self, data: OutputData) -> ModelOutput:
-        if self.model_config.disable_mora_f0:
-            for d in data["mora_f0"]:
-                d.fill_(0)
-
-        output_list: List[Tensor]
-        _, output_list = self.predictor(
-            frame_f0_list=data["frame_f0"],
-            frame_phoneme_list=data["frame_phoneme"],
-            frame_mora_index_list=data["frame_mora_index"],
-            mora_f0_list=data["mora_f0"],
-            mora_vowel_list=data["mora_vowel"],
-            mora_consonant_list=data["mora_consonant"],
+    def forward(self, data: DatasetOutput) -> ModelOutput:
+        output_list: List[Tensor] = self.predictor(
+            vowel_list=data["vowel"],
+            mora_position_list=data["mora_position"],
+            feature_list=data["feature"],
+            frame_position_list=data["frame_position"],
         )
 
         output = torch.cat(output_list)
-        output_accent_start = output[:, 0]
-        output_accent_end = output[:, 1]
-        output_accent_phrase_start = output[:, 2]
-        output_accent_phrase_end = output[:, 3]
 
-        target_accent_start = torch.cat(data["accent_start"])
-        target_accent_end = torch.cat(data["accent_end"])
-        target_accent_phrase_start = torch.cat(data["accent_phrase_start"])
-        target_accent_phrase_end = torch.cat(data["accent_phrase_end"])
+        target_accent = torch.cat(data["accent"])
 
-        loss_accent_start, precision_accent_start, recall_accent_start = calc(
-            output_accent_start, target_accent_start
+        loss = F.cross_entropy(output, target_accent)
+
+        precision_accent_start, recall_accent_start = calc(
+            output[:, :, 0], target_accent[:, 0]
         )
-        loss_accent_end, precision_accent_end, recall_accent_end = calc(
-            output_accent_end, target_accent_end
+        precision_accent_end, recall_accent_end = calc(
+            output[:, :, 1], target_accent[:, 1]
         )
-        (
-            loss_accent_phrase_start,
-            precision_accent_phrase_start,
-            recall_accent_phrase_start,
-        ) = calc(output_accent_phrase_start, target_accent_phrase_start)
-        (
-            loss_accent_phrase_end,
-            precision_accent_phrase_end,
-            recall_accent_phrase_end,
-        ) = calc(output_accent_phrase_end, target_accent_phrase_end)
-
-        loss = (
-            loss_accent_start
-            + loss_accent_end
-            + loss_accent_phrase_start
-            + loss_accent_phrase_end
+        precision_accent_phrase_start, recall_accent_phrase_start = calc(
+            output[:, :, 2], target_accent[:, 2]
+        )
+        precision_accent_phrase_end, recall_accent_phrase_end = calc(
+            output[:, :, 3], target_accent[:, 3]
         )
 
         return ModelOutput(
             loss=loss,
-            loss_accent_start=loss_accent_start,
-            loss_accent_end=loss_accent_end,
-            loss_accent_phrase_start=loss_accent_phrase_start,
-            loss_accent_phrase_end=loss_accent_phrase_end,
             precision_accent_start=precision_accent_start,
             precision_accent_end=precision_accent_end,
             precision_accent_phrase_start=precision_accent_phrase_start,

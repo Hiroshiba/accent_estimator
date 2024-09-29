@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, List, Union
 
 import numpy
 import torch
@@ -7,6 +7,7 @@ from torch import Tensor, nn
 from typing_extensions import TypedDict
 
 from accent_estimator.config import Config
+from accent_estimator.data.data import generate_position_array
 from accent_estimator.network.predictor import Predictor, create_predictor
 
 
@@ -46,43 +47,44 @@ class Generator(nn.Module):
 
     def forward(
         self,
-        frame_f0_list: List[Union[numpy.ndarray, Tensor]],
-        frame_phoneme_list: List[Union[numpy.ndarray, Tensor]],
-        frame_mora_index_list: List[Union[numpy.ndarray, Tensor]],
-        mora_f0_list: List[Union[numpy.ndarray, Tensor]],
-        mora_vowel_list: List[Union[numpy.ndarray, Tensor]],
-        mora_consonant_list: List[Union[numpy.ndarray, Tensor]],
+        vowel_list: List[Union[numpy.ndarray, Tensor]],
+        feature_list: List[Union[numpy.ndarray, Tensor]],
     ):
-        frame_f0_list = [to_tensor(v).to(self.device) for v in frame_f0_list]
-        frame_phoneme_list = [to_tensor(v).to(self.device) for v in frame_phoneme_list]
-        frame_mora_index_list = [
-            to_tensor(v).to(self.device) for v in frame_mora_index_list
-        ]
-        mora_f0_list = [to_tensor(v).to(self.device) for v in mora_f0_list]
-        mora_vowel_list = [to_tensor(v).to(self.device) for v in mora_vowel_list]
-        mora_consonant_list = [
-            to_tensor(v).to(self.device) for v in mora_consonant_list
-        ]
+        def prepare_tensors(
+            array_list: List[Union[numpy.ndarray, Tensor]]
+        ) -> List[Tensor]:
+            return [to_tensor(array).to(self.device) for array in array_list]
+
+        vowel_list = prepare_tensors(vowel_list)
+        feature_list = prepare_tensors(feature_list)
+
+        mora_position_list = prepare_tensors(
+            [
+                generate_position_array(t.shape[0]).astype(numpy.float32)
+                for t in vowel_list
+            ]
+        )
+        frame_position_list = prepare_tensors(
+            [
+                generate_position_array(t.shape[0]).astype(numpy.float32)
+                for t in feature_list
+            ]
+        )
 
         with torch.inference_mode():
-            if self.config.model.disable_mora_f0:
-                mora_f0_list = [torch.zeros_like(v) for v in mora_f0_list]
-
-            output_list = self.predictor.inference(
-                frame_f0_list=frame_f0_list,
-                frame_phoneme_list=frame_phoneme_list,
-                frame_mora_index_list=frame_mora_index_list,
-                mora_f0_list=mora_f0_list,
-                mora_vowel_list=mora_vowel_list,
-                mora_consonant_list=mora_consonant_list,
+            output_list: List[Tensor] = self.predictor(
+                vowel_list=vowel_list,
+                mora_position_list=mora_position_list,
+                feature_list=feature_list,
+                frame_position_list=frame_position_list,
             )
 
         return [
             GeneratorOutput(
-                accent_start=output[:, 0],
-                accent_end=output[:, 1],
-                accent_phrase_start=output[:, 2],
-                accent_phrase_end=output[:, 3],
+                accent_start=output[:, :, 0],
+                accent_end=output[:, :, 1],
+                accent_phrase_start=output[:, :, 2],
+                accent_phrase_end=output[:, :, 3],
             )
             for output in output_list
         ]

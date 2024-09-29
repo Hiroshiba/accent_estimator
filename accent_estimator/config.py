@@ -1,4 +1,6 @@
+import copy
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from accent_estimator.utility import dataclass_utility
@@ -7,9 +9,8 @@ from accent_estimator.utility.git_utility import get_branch_name, get_commit_id
 
 @dataclass
 class DatasetFileConfig:
-    f0_glob: str
+    feature_glob: str
     phoneme_list_glob: str
-    volume_glob: str
     accent_start_glob: str
     accent_end_glob: str
     accent_phrase_start_glob: str
@@ -19,36 +20,45 @@ class DatasetFileConfig:
 @dataclass
 class DatasetConfig:
     train_file: DatasetFileConfig
-    valid_file: DatasetFileConfig
-    frame_rate: float
-    frame_phoneme_mask_max_second: float
-    frame_phoneme_mask_rate: float  # 秒あたりいくつあるか
-    mora_phoneme_mask_max_length: int
-    mora_phoneme_mask_rate: float  # モーラあたりいくつあるか
+    # valid_file: DatasetFileConfig
+    train_num: Optional[int]
     test_num: int
     seed: int = 0
 
 
 @dataclass
-class NetworkConfig:
-    phoneme_size: int
-    phoneme_embedding_size: int
+class MMConformerConfig:
     hidden_size: int
-    encoder_block_num: int
-    attention_heads: int
-    decoder_block_num: int
-    post_layer_num: int
+    block_num: int
+    dropout_rate: float
+    positional_dropout_rate: float
+    attention_head_size: int
+    attention_dropout_rate: float
+    use_conv_glu_module: bool
+    conv_glu_module_kernel_size_a: int
+    conv_glu_module_kernel_size_b: int
+    feed_forward_hidden_size: int
+    feed_forward_kernel_size_a: int
+    feed_forward_kernel_size_b: int
+
+
+@dataclass
+class NetworkConfig:
+    vowel_embedding_size: int
+    feature_size: int
+    hidden_size: int
+    mm_conformer_config: MMConformerConfig
 
 
 @dataclass
 class ModelConfig:
-    disable_mora_f0: bool
+    pass
 
 
 @dataclass
 class TrainConfig:
     batch_size: int
-    eval_batch_size: Optional[int]
+    eval_batch_size: int
     log_epoch: int
     eval_epoch: int
     snapshot_epoch: int
@@ -57,6 +67,7 @@ class TrainConfig:
     optimizer: Dict[str, Any]
     scheduler: Dict[str, Any]
     weight_initializer: Optional[str] = None
+    pretrained_predictor_path: Optional[Path] = None
     num_processes: int = 4
     use_gpu: bool = True
     use_amp: bool = True
@@ -79,6 +90,7 @@ class Config:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Config":
+        d = copy.deepcopy(d)
         backward_compatible(d)
         return dataclass_utility.convert_from_dict(cls, d)
 

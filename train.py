@@ -4,7 +4,8 @@ from typing import List
 
 import torch
 import yaml
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 
 from accent_estimator.config import Config
@@ -31,29 +32,8 @@ def train(config_yaml_path: Path, output_dir: Path):
     config = Config.from_dict(config_dict)
     config.add_git_info()
 
-    # model
-    predictor = create_predictor(config.network)
-    model = Model(model_config=config.model, predictor=predictor)
-    if config.train.weight_initializer is not None:
-        init_weights(model, name=config.train.weight_initializer)
-
-    device = "cuda" if config.train.use_gpu else "cpu"
-    model.to(device)
-    model.train()
-
-    # evaluator
-    generator = Generator(
-        config=config, predictor=predictor, use_gpu=config.train.use_gpu
-    )
-    evaluator = Evaluator(generator=generator)
-
     # dataset
-    datasets = create_dataset(config.dataset)
-
     def _create_loader(dataset, for_train: bool, for_eval: bool):
-        if dataset is None:
-            return None
-
         batch_size = (
             config.train.eval_batch_size if for_eval else config.train.batch_size
         )
@@ -73,11 +53,34 @@ def train(config_yaml_path: Path, output_dir: Path):
     train_loader = _create_loader(datasets["train"], for_train=True, for_eval=False)
     test_loader = _create_loader(datasets["test"], for_train=False, for_eval=False)
     eval_loader = _create_loader(datasets["test"], for_train=False, for_eval=True)
-    valid_loader = _create_loader(datasets["valid"], for_train=False, for_eval=True)
+    # valid_loader = _create_loader(datasets["valid"], for_train=False, for_eval=True)
+
+    # predictor
+    predictor = create_predictor(config.network)
+    device = "cuda" if config.train.use_gpu else "cpu"
+    if config.train.pretrained_predictor_path is not None:
+        state_dict = torch.load(
+            config.train.pretrained_predictor_path, map_location=device
+        )
+        predictor.load_state_dict(state_dict)
+    print("predictor:", predictor)
+
+    # model
+    model = Model(model_config=config.model, predictor=predictor)
+    if config.train.weight_initializer is not None:
+        init_weights(model, name=config.train.weight_initializer)
+    model.to(device)
+    model.train()
+
+    # evaluator
+    generator = Generator(
+        config=config, predictor=predictor, use_gpu=config.train.use_gpu
+    )
+    evaluator = Evaluator(generator=generator)
 
     # optimizer
     optimizer = make_optimizer(config_dict=config.train.optimizer, model=model)
-    scaler = GradScaler(enabled=config.train.use_amp)
+    scaler = GradScaler(device, enabled=config.train.use_amp)
 
     # logger
     logger = Logger(
@@ -132,14 +135,16 @@ def train(config_yaml_path: Path, output_dir: Path):
 
     for _ in range(config.train.stop_epoch):
         epoch += 1
-        if epoch == config.train.stop_epoch:
+        if epoch > config.train.stop_epoch:
             break
+
+        model.train()
 
         train_results: List[ModelOutput] = []
         for batch in train_loader:
             iteration += 1
 
-            with autocast(enabled=config.train.use_amp):
+            with autocast(device, enabled=config.train.use_amp):
                 batch = to_device(batch, device, non_blocking=True)
                 result: ModelOutput = model(batch)
 
@@ -148,7 +153,8 @@ def train(config_yaml_path: Path, output_dir: Path):
             scaler.step(optimizer)
             scaler.update()
 
-            scheduler.step()
+            if scheduler is not None:
+                scheduler.step()
 
             train_results.append(detach_cpu(result))
 
@@ -177,12 +183,12 @@ def train(config_yaml_path: Path, output_dir: Path):
                         eval_results.append(detach_cpu(result))
                     summary["eval"] = reduce_result(eval_results)
 
-                    valid_results: List[ModelOutput] = []
-                    for batch in valid_loader:
-                        batch = to_device(batch, device, non_blocking=True)
-                        result = evaluator(batch)
-                        valid_results.append(detach_cpu(result))
-                    summary["valid"] = reduce_result(valid_results)
+                    # valid_results: List[ModelOutput] = []
+                    # for batch in valid_loader:
+                    #     batch = to_device(batch, device, non_blocking=True)
+                    #     result = evaluator(batch)
+                    #     valid_results.append(detach_cpu(result))
+                    # summary["valid"] = reduce_result(valid_results)
 
                     if epoch % config.train.snapshot_epoch == 0:
                         torch.save(
@@ -198,12 +204,10 @@ def train(config_yaml_path: Path, output_dir: Path):
                         )
 
                         save_manager.save(
-                            value=summary["valid"]["value"], step=epoch, judge="max"
+                            value=summary["eval"]["value"], step=epoch, judge="max"
                         )
 
                 logger.log(summary=summary, step=epoch)
-
-            model.train()
 
 
 if __name__ == "__main__":

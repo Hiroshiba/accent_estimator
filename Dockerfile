@@ -1,6 +1,8 @@
-FROM pytorch/pytorch:1.12.1-cuda11.3-cudnn8-runtime
+FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
 SHELL ["/bin/bash", "-c"]
 
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Tokyo
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 RUN apt-get update --fix-missing && \
     apt-get install -y wget bzip2 ca-certificates curl git sudo && \

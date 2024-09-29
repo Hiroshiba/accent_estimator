@@ -1,5 +1,6 @@
 import argparse
 import multiprocessing
+import traceback
 from functools import partial
 from pathlib import Path
 from typing import Optional
@@ -31,29 +32,27 @@ def _check(
 ):
     wrapper = partial(_wrapper, dataset=dataset)
 
-    if num_processes is None:
-        num_processes = multiprocessing.cpu_count()
-
     with multiprocessing.Pool(processes=num_processes) as pool:
         it = pool.imap_unordered(wrapper, range(len(dataset)), chunksize=2**8)
         for i, error in tqdm(it, desc=desc, total=len(dataset)):
             if error is not None:
                 print(f"error at {i}")
+                traceback.print_exception(type(error), error, error.__traceback__)
                 breakpoint()
+                raise error
 
-    if num_processes != 0:
-        it = DataLoader(
-            dataset=dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_processes,
-            collate_fn=collate_list,
-            pin_memory=pin_memory,
-            drop_last=drop_last,
-            timeout=0 if num_processes == 0 else 15,
-        )
-        for i, _ in tqdm(enumerate(it), desc=desc, total=len(dataset) // batch_size):
-            pass
+    it = DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_processes,
+        collate_fn=collate_list,
+        pin_memory=pin_memory,
+        drop_last=drop_last,
+        timeout=0 if num_processes == 0 else 15,
+    )
+    for i, _ in tqdm(enumerate(it), desc=desc, total=len(dataset) // batch_size):
+        pass
 
 
 def check_dataset(config_yaml_path: Path, trials: int):
@@ -81,7 +80,7 @@ def check_dataset(config_yaml_path: Path, trials: int):
         wrapper(datasets["train"], desc="train", drop_last=True)
         wrapper(datasets["test"], desc="test", drop_last=False)
         wrapper(datasets["eval"], desc="eval", drop_last=False)
-        wrapper(datasets["valid"], desc="valid", drop_last=False)
+        # wrapper(datasets["valid"], desc="valid", drop_last=False)
 
 
 if __name__ == "__main__":
