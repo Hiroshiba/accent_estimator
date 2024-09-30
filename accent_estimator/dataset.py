@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain, groupby
+from os import PathLike
 from pathlib import Path
 from typing import TypedDict
 
@@ -29,26 +30,30 @@ class DatasetInput:
 
 @dataclass
 class LazyDatasetInput:
-    feature_path: Path
-    phoneme_list_path: Path
-    accent_start_path: Path
-    accent_end_path: Path
-    accent_phrase_start_path: Path
-    accent_phrase_end_path: Path
+    feature_path: PathLike
+    phoneme_list_path: PathLike
+    accent_start_path: PathLike
+    accent_end_path: PathLike
+    accent_phrase_start_path: PathLike
+    accent_phrase_end_path: PathLike
 
     def generate(self):
         return DatasetInput(
             feature=numpy.load(self.feature_path),
-            phoneme_list=self.phoneme_list_path.read_text().split(),
+            phoneme_list=Path(self.phoneme_list_path).read_text().split(),
             accent_start=[
-                bool(int(s)) for s in self.accent_start_path.read_text().split()
+                bool(int(s)) for s in Path(self.accent_start_path).read_text().split()
             ],
-            accent_end=[bool(int(s)) for s in self.accent_end_path.read_text().split()],
+            accent_end=[
+                bool(int(s)) for s in Path(self.accent_end_path).read_text().split()
+            ],
             accent_phrase_start=[
-                bool(int(s)) for s in self.accent_phrase_start_path.read_text().split()
+                bool(int(s))
+                for s in Path(self.accent_phrase_start_path).read_text().split()
             ],
             accent_phrase_end=[
-                bool(int(s)) for s in self.accent_phrase_end_path.read_text().split()
+                bool(int(s))
+                for s in Path(self.accent_phrase_end_path).read_text().split()
             ],
         )
 
@@ -159,14 +164,12 @@ def get_datas(config: DatasetFileConfig):
     ]
 
     # 同じ音素列のものをまとめる
-    # ファイル名が`{コーパス種}_{index}`の形式であることを前提としている
-    # FIXME: `{話者}_{コーパス種}_{index}`を前提としたい
-    def keyfunc(d: LazyDatasetInput):
-        # return "_".join(d.feature_path.stem.split("_")[-2:])
-        return d.feature_path.stem
+    # NOTE: ファイル名が`{コーパス種}_{index}`の形式であることを前提としている
+    def keyfunc(d: tuple[str, LazyDatasetInput]):
+        return "_".join(d[0].split("_")[-2:])
 
-    datas = sorted(datas, key=keyfunc)
-    grouped_datas = {k: list(g) for k, g in groupby(datas, key=keyfunc)}
+    fn_datas = sorted(zip(fn_list, datas), key=keyfunc)
+    grouped_datas = {k: [d[1] for d in g] for k, g in groupby(fn_datas, key=keyfunc)}
     return grouped_datas
 
 
