@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain, groupby
-from os import PathLike
-from pathlib import Path
 from typing import TypedDict
 
 import numpy
@@ -13,7 +11,7 @@ from torch.utils.data import Dataset
 from accent_estimator.data.data import generate_position_array, vowel_to_id
 
 from .config import DatasetConfig, DatasetFileConfig
-from .utility.dataset_utility import get_stem_to_paths
+from .utility.dataset_utility import HPath, get_stem_to_paths, load_numpy, read_text
 
 mora_phoneme_list = ["a", "i", "u", "e", "o", "I", "U", "E", "N", "cl", "pau", "sil"]
 
@@ -30,30 +28,26 @@ class DatasetInput:
 
 @dataclass
 class LazyDatasetInput:
-    feature_path: PathLike
-    phoneme_list_path: PathLike
-    accent_start_path: PathLike
-    accent_end_path: PathLike
-    accent_phrase_start_path: PathLike
-    accent_phrase_end_path: PathLike
+    feature_path: HPath
+    phoneme_list_path: HPath
+    accent_start_path: HPath
+    accent_end_path: HPath
+    accent_phrase_start_path: HPath
+    accent_phrase_end_path: HPath
 
     def generate(self):
         return DatasetInput(
-            feature=numpy.load(self.feature_path),
-            phoneme_list=Path(self.phoneme_list_path).read_text().split(),
+            feature=load_numpy(self.feature_path),
+            phoneme_list=read_text(self.phoneme_list_path).split(),
             accent_start=[
-                bool(int(s)) for s in Path(self.accent_start_path).read_text().split()
+                bool(int(s)) for s in read_text(self.accent_start_path).split()
             ],
-            accent_end=[
-                bool(int(s)) for s in Path(self.accent_end_path).read_text().split()
-            ],
+            accent_end=[bool(int(s)) for s in read_text(self.accent_end_path).split()],
             accent_phrase_start=[
-                bool(int(s))
-                for s in Path(self.accent_phrase_start_path).read_text().split()
+                bool(int(s)) for s in read_text(self.accent_phrase_start_path).split()
             ],
             accent_phrase_end=[
-                bool(int(s))
-                for s in Path(self.accent_phrase_end_path).read_text().split()
+                bool(int(s)) for s in read_text(self.accent_phrase_end_path).split()
             ],
         )
 

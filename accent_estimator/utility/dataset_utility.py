@@ -3,19 +3,50 @@ from glob import glob
 from os import PathLike, replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile, gettempdir
-from typing import Dict, List
+
+import h5py
+import numpy
 
 
-def _stem_to_path(g: str):
-    return {Path(p).stem: Path(p) for p in glob(g)}
+class Hdf5Path:
+    """HDF5ファイル用のパスっぽいもの。HDF5ファイルへのパスと、ファイル内のパスを持つ。"""
+
+    def __init__(self, hdf5_path: Path, internal_path: str):
+        self.hdf5_path = hdf5_path
+        self.internal_path = internal_path
+
+    def __str__(self):
+        return f"{self.hdf5_path}/{self.internal_path}"
+
+    def __repr__(self):
+        return f"<Hdf5Path '{self.hdf5_path}/{self.internal_path}'>"
+
+
+HPath = Path | Hdf5Path  # HDF5用パスか通常のパス
+
+
+def _hdf5_to_path(p: Path):
+    with h5py.File(p, "r") as f:
+        return {Path(k).stem: Hdf5Path(p, k) for k in f.keys()}
+
+
+def _stem_to_path(g: str) -> dict[str, HPath]:
+    d = {}
+    for p in map(Path, glob(g)):
+        if p.suffix == ".hdf5":
+            d.update(_hdf5_to_path(p))
+        else:
+            d[Path(p).stem] = p
+    return d
 
 
 def get_stem_to_paths(*globs: str):
     """
     globからstemをキーとしたPathの辞書を取得する。
+    HDF5ファイルの場合はroot直下の名前をstemとして扱い、HDF5ファイルのパスをPathとして扱う。
     stemが一致しない場合はエラー。
     """
-    stem_to_paths: List[Dict[str, Path]] = []
+    stem_to_paths: list[dict[str, HPath]] = []
 
     first_paths = _stem_to_path(globs[0])
     fn_list = sorted(first_paths.keys())
@@ -32,6 +63,22 @@ def get_stem_to_paths(*globs: str):
         stem_to_paths.append(paths)
 
     return fn_list, *stem_to_paths
+
+
+def read_text(path: HPath) -> str:
+    if isinstance(path, Path):
+        return path.read_text()
+    else:
+        with h5py.File(path.hdf5_path, "r") as f:
+            return f[path.internal_path][()].decode()
+
+
+def load_numpy(path: HPath) -> numpy.ndarray:
+    if isinstance(path, Path):
+        return numpy.load(path)
+    else:
+        with h5py.File(path.hdf5_path, "r") as f:
+            return numpy.array(f[path.internal_path])  # TODO: 動くか検証する
 
 
 class CachePath(PathLike):
