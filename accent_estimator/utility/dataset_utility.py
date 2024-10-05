@@ -2,7 +2,7 @@ import filecmp
 from glob import glob
 from os import PathLike, replace
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, gettempdir
 
 import h5py
 import numpy
@@ -19,9 +19,7 @@ class CachePath(PathLike):
         self,
         src_path: PathLike,
         dst_path: Path = None,
-        cache_dir: Path = Path(
-            "/mnt/disks/local-ssd"
-        ),  # FIXME: 環境変数で指定可能にする
+        cache_dir: Path = Path(gettempdir()),
     ):
         src_path = Path(src_path)
         if dst_path is None:

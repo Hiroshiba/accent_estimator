@@ -11,13 +11,7 @@ from torch.utils.data import Dataset
 from accent_estimator.data.data import generate_position_array, vowel_to_id
 
 from .config import DatasetConfig, DatasetFileConfig
-from .utility.dataset_utility import (
-    CachePath,
-    HPath,
-    get_stem_to_paths,
-    load_numpy,
-    read_text,
-)
+from .utility.dataset_utility import HPath, get_stem_to_paths, load_numpy, read_text
 
 mora_phoneme_list = ["a", "i", "u", "e", "o", "I", "U", "E", "N", "cl", "pau", "sil"]
 
@@ -153,7 +147,7 @@ def get_datas(config: DatasetFileConfig):
 
     datas = [
         LazyDatasetInput(
-            feature_path=CachePath(feature_paths[fn]),
+            feature_path=feature_paths[fn],
             phoneme_list_path=phoneme_list_paths[fn],
             accent_start_path=accent_start_paths[fn],
             accent_end_path=accent_end_paths[fn],
