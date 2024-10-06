@@ -148,8 +148,12 @@ def train(config_yaml_path: Path, output_dir: Path):
                 batch = to_device(batch, device, non_blocking=True)
                 result: ModelOutput = model(batch)
 
+            loss = result["loss"]
+            if loss.isnan():
+                raise ValueError("loss is NaN")
+
             optimizer.zero_grad()
-            scaler.scale(result["loss"]).backward()
+            scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
