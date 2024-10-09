@@ -29,7 +29,11 @@ class Predictor(nn.Module):
         self.encoder = encoder
 
         output_size = 4 * 2
-        self.post = torch.nn.Linear(hidden_size, output_size)
+        self.post = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, output_size),
+        )
 
     def aggregate_feature(
         self,
@@ -101,14 +105,14 @@ class Predictor(nn.Module):
 
         mh = self.pre_mora(mh)  # (B, mL, ?)
 
-        mora_mask = make_non_pad_mask(mora_length).unsqueeze(-2).to(mh.device)
+        mora_mask = make_non_pad_mask(mora_length).unsqueeze(-2).to(device)
 
         # フレームレベル
         fh = pad_sequence(feature_list, batch_first=True)  # (B, fL, ?)
 
         fh = self.pre_frame(fh)
 
-        frame_mask = make_non_pad_mask(frame_length).unsqueeze(-2).to(fh.device)
+        frame_mask = make_non_pad_mask(frame_length).unsqueeze(-2).to(device)
 
         # Encoder
         mh, _, _, _ = self.encoder(
