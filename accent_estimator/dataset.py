@@ -8,7 +8,8 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from accent_estimator.data.data import generate_position_array, vowel_to_id
+from accent_estimator.data.data import vowel_to_id
+from accent_estimator.data.phoneme import OjtPhoneme
 
 from .config import DatasetConfig, DatasetFileConfig
 from .utility.dataset_utility import HPath, get_stem_to_paths, load_numpy, read_text
@@ -19,7 +20,7 @@ mora_phoneme_list = ["a", "i", "u", "e", "o", "I", "U", "E", "N", "cl", "pau", "
 @dataclass
 class DatasetInput:
     feature: numpy.ndarray
-    phoneme_list: list[str]
+    phoneme_list: list[OjtPhoneme]
     accent_start: list[bool]
     accent_end: list[bool]
     accent_phrase_start: list[bool]
@@ -38,7 +39,9 @@ class LazyDatasetInput:
     def generate(self):
         return DatasetInput(
             feature=load_numpy(self.feature_path),
-            phoneme_list=read_text(self.phoneme_list_path).split(),
+            phoneme_list=OjtPhoneme.loads_julius_list(
+                read_text(self.phoneme_list_path)
+            ),
             accent_start=[
                 bool(int(s)) for s in read_text(self.accent_start_path).split()
             ],
@@ -54,24 +57,33 @@ class LazyDatasetInput:
 
 class DatasetOutput(TypedDict):
     vowel: Tensor
-    mora_position: Tensor
     feature: Tensor
-    frame_position: Tensor
+    mora_index: Tensor  # フレームとモーラ番号の対応
     accent: Tensor
+
+
+def make_index_array(split_second_list: list[float], rate: float, length: int):
+    to_index = lambda x: int(x * rate)
+    array = numpy.ones(length, dtype=numpy.int64) * (len(split_second_list) - 1)
+    split_second_list = numpy.r_[0, split_second_list]
+    for i in range(len(split_second_list) - 1):
+        array[to_index(split_second_list[i]) : to_index(split_second_list[i + 1])] = i
+    return array[:length]
 
 
 def preprocess(
     d: DatasetInput,
 ):
-    feature = d.feature
+    frame_rate = 50
 
     # モーラレベルにする
     assert len(d.phoneme_list) == len(
         d.accent_start
     ), f"len(d.phoneme_list)={len(d.phoneme_list)}, len(d.accent_start)={len(d.accent_start)}"
 
-    mora_indexes = [i for i, p in enumerate(d.phoneme_list) if p in mora_phoneme_list]
-    mora_indexes = mora_indexes[1:-1]  # 最初と最後のsilを除く
+    mora_indexes = [
+        i for i, p in enumerate(d.phoneme_list) if p.phoneme in mora_phoneme_list
+    ]
     accent_start = numpy.array([d.accent_start[i] for i in mora_indexes])
     accent_end = numpy.array([d.accent_end[i] for i in mora_indexes])
     accent_phrase_start = numpy.array([d.accent_phrase_start[i] for i in mora_indexes])
@@ -89,19 +101,18 @@ def preprocess(
     )
 
     # 母音の音素情報
-    vowel = numpy.array([vowel_to_id(d.phoneme_list[i]) for i in mora_indexes]).astype(
-        numpy.int32
-    )
+    vowel = numpy.array([vowel_to_id(d.phoneme_list[i].phoneme) for i in mora_indexes])
 
-    # 位置情報
-    mora_position = generate_position_array(len(mora_indexes))
-    frame_position = generate_position_array(len(feature))
+    # フレームとモーラ番号の対応
+    mora_split_second_list = [d.phoneme_list[i].end for i in mora_indexes]
+    mora_index = make_index_array(
+        split_second_list=mora_split_second_list, rate=frame_rate, length=len(d.feature)
+    )
 
     output_data = DatasetOutput(
         vowel=torch.from_numpy(vowel).long(),
-        mora_position=torch.from_numpy(mora_position).float(),
-        feature=torch.from_numpy(feature).float(),
-        frame_position=torch.from_numpy(frame_position).float(),
+        feature=torch.from_numpy(d.feature).float(),
+        mora_index=torch.from_numpy(mora_index).long(),
         accent=torch.from_numpy(accent).long(),
     )
     return output_data

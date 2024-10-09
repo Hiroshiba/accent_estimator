@@ -53,9 +53,8 @@ class Model(nn.Module):
     def forward(self, data: DatasetOutput) -> ModelOutput:
         output_list: List[Tensor] = self.predictor(
             vowel_list=data["vowel"],
-            mora_position_list=data["mora_position"],
             feature_list=data["feature"],
-            frame_position_list=data["frame_position"],
+            mora_index_list=data["mora_index"],
         )
 
         output = torch.cat(output_list)

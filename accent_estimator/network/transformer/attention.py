@@ -8,6 +8,22 @@ import torch
 from torch import Tensor, nn
 
 
+def _get_dtype_min(
+    dtype: torch.dtype,
+    min16: float = torch.finfo(torch.float16).min,
+    min32: float = torch.finfo(torch.float32).min,
+    min64: float = torch.finfo(torch.float64).min,
+) -> float:
+    if dtype == torch.float16:
+        return min16
+    elif dtype == torch.float32:
+        return min32
+    elif dtype == torch.float64:
+        return min64
+    else:
+        raise RuntimeError(f"Expected x to be floating-point, got {dtype}")
+
+
 class MultiHeadedAttention(nn.Module):
     """
     Td: デコーダー側の系列長
@@ -56,7 +72,7 @@ class MultiHeadedAttention(nn.Module):
         batch_size = value.size(0)
         if mask is not None:
             mask = mask.unsqueeze(1).eq(0)  # (B, 1, Td or 1, Te)
-            min_value = torch.finfo(score.dtype).min
+            min_value = _get_dtype_min(score.dtype)
             score = score.masked_fill(mask, min_value)
             attn = torch.softmax(score, dim=-1).masked_fill(mask, 0.0)  # (B, H, Td, Te)
         else:
@@ -110,9 +126,9 @@ class RelPositionMultiHeadedAttention(MultiHeadedAttention):
         self,
         x: Tensor,  # (B, H, Td, 2*Td-1)
     ):
-        zero_pad = torch.zeros((*x.size()[:3], 1), device=x.device, dtype=x.dtype)
+        zero_pad = torch.zeros_like(x[:, :, :, :1])
         x_padded = torch.cat([zero_pad, x], dim=-1)
-        x_padded = x_padded.view(*x.size()[:2], x.size(3) + 1, x.size(2))
+        x_padded = x_padded.view(x.size(0), x.size(1), x.size(3) + 1, x.size(2))
         x = x_padded[:, :, 1:].view_as(x)[:, :, :, : x.size(-1) // 2 + 1]
         return x  # (B, H, Td, Td)
 

@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, List, Union
+from typing import Any
 
 import numpy
 import torch
@@ -18,7 +18,7 @@ class GeneratorOutput(TypedDict):
     accent_phrase_end: Tensor
 
 
-def to_tensor(array: Union[Tensor, numpy.ndarray, Any]):
+def to_tensor(array: Tensor | numpy.ndarray | Any):
     if not isinstance(array, (Tensor, numpy.ndarray)):
         array = numpy.asarray(array)
     if isinstance(array, numpy.ndarray):
@@ -31,7 +31,7 @@ class Generator(nn.Module):
     def __init__(
         self,
         config: Config,
-        predictor: Union[Predictor, Path],
+        predictor: Predictor | Path,
         use_gpu: bool,
     ):
         super().__init__()
@@ -47,36 +47,22 @@ class Generator(nn.Module):
 
     def forward(
         self,
-        vowel_list: List[Union[numpy.ndarray, Tensor]],
-        feature_list: List[Union[numpy.ndarray, Tensor]],
+        vowel_list: list[numpy.ndarray | Tensor],
+        feature_list: list[numpy.ndarray | Tensor],
+        mora_index_list: list[numpy.ndarray | Tensor],
     ):
-        def prepare_tensors(
-            array_list: List[Union[numpy.ndarray, Tensor]]
-        ) -> List[Tensor]:
+        def prepare_tensors(array_list: list[numpy.ndarray | Tensor]) -> list[Tensor]:
             return [to_tensor(array).to(self.device) for array in array_list]
 
         vowel_list = prepare_tensors(vowel_list)
         feature_list = prepare_tensors(feature_list)
-
-        mora_position_list = prepare_tensors(
-            [
-                generate_position_array(t.shape[0]).astype(numpy.float32)
-                for t in vowel_list
-            ]
-        )
-        frame_position_list = prepare_tensors(
-            [
-                generate_position_array(t.shape[0]).astype(numpy.float32)
-                for t in feature_list
-            ]
-        )
+        mora_index_list = prepare_tensors(mora_index_list)
 
         with torch.inference_mode():
-            output_list: List[Tensor] = self.predictor(
+            output_list: list[Tensor] = self.predictor(
                 vowel_list=vowel_list,
-                mora_position_list=mora_position_list,
                 feature_list=feature_list,
-                frame_position_list=frame_position_list,
+                mora_index_list=mora_index_list,
             )
 
         return [

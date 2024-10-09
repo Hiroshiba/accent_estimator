@@ -1,7 +1,4 @@
-from typing import List
-
 import torch
-import torch.nn.functional as F
 from torch import Tensor, nn
 from typing_extensions import TypedDict
 
@@ -29,9 +26,10 @@ class Evaluator(nn.Module):
         self.generator = generator
 
     def forward(self, data: DatasetOutput) -> EvaluatorOutput:
-        output_list: List[GeneratorOutput] = self.generator(
+        output_list: list[GeneratorOutput] = self.generator(
             vowel_list=data["vowel"],
             feature_list=data["feature"],
+            mora_index_list=data["mora_index"],
         )
 
         # output = torch.cat(output_list)
