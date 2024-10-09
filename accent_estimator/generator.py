@@ -7,6 +7,7 @@ from torch import Tensor, nn
 from typing_extensions import TypedDict
 
 from accent_estimator.config import Config
+from accent_estimator.data.data import generate_position_array
 from accent_estimator.network.predictor import Predictor, create_predictor
 
 
