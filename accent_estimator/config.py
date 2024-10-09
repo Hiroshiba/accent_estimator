@@ -45,6 +45,7 @@ class MMConformerConfig:
 @dataclass
 class NetworkConfig:
     vowel_embedding_size: int
+    frame_reduction_factor: int
     feature_size: int
     hidden_size: int
     mm_conformer_config: MMConformerConfig

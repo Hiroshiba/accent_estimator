@@ -1,5 +1,6 @@
 import torch
 from torch import Tensor, nn
+from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
 
 from ..config import NetworkConfig
@@ -13,6 +14,7 @@ class Predictor(nn.Module):
         self,
         vowel_size: int,
         vowel_embedding_size: int,
+        frame_reduction_factor: int,
         feature_size: int,
         hidden_size: int,
         encoder: MMEncoder,
@@ -25,6 +27,7 @@ class Predictor(nn.Module):
         self.pre_mora = nn.Linear(feature_size + vowel_embedding_size, hidden_size)
 
         self.pre_frame = nn.Linear(feature_size, hidden_size)
+        self.frame_reduction_factor = frame_reduction_factor
 
         self.encoder = encoder
 
@@ -82,10 +85,10 @@ class Predictor(nn.Module):
         fL: frame length
         """
         device = feature_list[0].device
-        mora_length = torch.tensor([t.shape[0] for t in vowel_list], device=device)
-        frame_length = torch.tensor([t.shape[0] for t in feature_list], device=device)
 
         # モーラごとに特徴量を集約
+        mora_length = torch.tensor([t.shape[0] for t in vowel_list], device=device)
+        frame_length = torch.tensor([t.shape[0] for t in feature_list], device=device)
         mora_feature_list = self.aggregate_feature(
             feature_list=feature_list,
             frame_length=frame_length,
@@ -107,8 +110,19 @@ class Predictor(nn.Module):
         fh = pad_sequence(feature_list, batch_first=True)  # (B, fL, ?)
 
         fh = self.pre_frame(fh)
+        fh = F.max_pool1d(
+            fh.transpose(1, 2),
+            kernel_size=self.frame_reduction_factor,
+            stride=self.frame_reduction_factor,
+        ).transpose(
+            1, 2
+        )  # (B, fL, ?)
 
-        frame_mask = make_non_pad_mask(frame_length).unsqueeze(-2).to(fh.device)
+        frame_mask = (
+            make_non_pad_mask(frame_length // self.frame_reduction_factor)
+            .unsqueeze(-2)
+            .to(fh.device)
+        )
 
         # Encoder
         mh, _, _, _ = self.encoder(
@@ -130,6 +144,7 @@ def create_predictor(config: NetworkConfig):
     return Predictor(
         vowel_size=len(vowels),
         vowel_embedding_size=config.vowel_embedding_size,
+        frame_reduction_factor=config.frame_reduction_factor,
         feature_size=config.feature_size,
         hidden_size=config.hidden_size,
         encoder=encoder,
