@@ -32,11 +32,10 @@ class Evaluator(nn.Module):
             mora_index_list=data["mora_index"],
         )
 
-        # output = torch.cat(output_list)
         accent_start = torch.cat([o["accent_start"] for o in output_list])
-        accent_end = torch.cat([o["accent_start"] for o in output_list])
-        accent_phrase_start = torch.cat([o["accent_start"] for o in output_list])
-        accent_phrase_end = torch.cat([o["accent_start"] for o in output_list])
+        accent_end = torch.cat([o["accent_end"] for o in output_list])
+        accent_phrase_start = torch.cat([o["accent_phrase_start"] for o in output_list])
+        accent_phrase_end = torch.cat([o["accent_phrase_end"] for o in output_list])
 
         target_accent = torch.cat(data["accent"])
 

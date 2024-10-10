@@ -104,25 +104,27 @@ class Predictor(nn.Module):
 
         mh = self.pre_mora(mh)  # (B, mL, ?)
 
-        mora_mask = make_non_pad_mask(mora_length).unsqueeze(-2).to(mh.device)
+        mora_mask = (
+            make_non_pad_mask(mora_length).unsqueeze(-2).to(mh.device)
+        )  # (B, mL, 1)
 
         # フレームレベル
         fh = pad_sequence(feature_list, batch_first=True)  # (B, fL, ?)
 
-        fh = self.pre_frame(fh)
+        fh = self.pre_frame(fh)  # (B, fL, ?)
         fh = F.max_pool1d(
             fh.transpose(1, 2),
             kernel_size=self.frame_reduction_factor,
             stride=self.frame_reduction_factor,
         ).transpose(
             1, 2
-        )  # (B, fL, ?)
+        )  # (B, fLr, ?)
 
         frame_mask = (
             make_non_pad_mask(frame_length // self.frame_reduction_factor)
             .unsqueeze(-2)
             .to(fh.device)
-        )
+        )  # (B, fLr, 1)
 
         # Encoder
         mh, _, _, _ = self.encoder(

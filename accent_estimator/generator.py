@@ -1,13 +1,13 @@
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import numpy
 import torch
-from torch import Tensor, nn
+from torch import ScriptModule, Tensor, nn
 from typing_extensions import TypedDict
 
 from accent_estimator.config import Config
-from accent_estimator.data.data import generate_position_array
 from accent_estimator.network.predictor import Predictor, create_predictor
 
 
@@ -31,7 +31,7 @@ class Generator(nn.Module):
     def __init__(
         self,
         config: Config,
-        predictor: Predictor | Path,
+        predictor: Predictor | str | Path | BytesIO,
         use_gpu: bool,
     ):
         super().__init__()
@@ -39,7 +39,7 @@ class Generator(nn.Module):
         self.config = config
         self.device = torch.device("cuda") if use_gpu else torch.device("cpu")
 
-        if isinstance(predictor, Path):
+        if isinstance(predictor, (str, Path, BytesIO)):
             state_dict = torch.load(predictor, map_location=self.device)
             predictor = create_predictor(config.network)
             predictor.load_state_dict(state_dict)
