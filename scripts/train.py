@@ -4,11 +4,10 @@ import argparse
 import os
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from io import BytesIO
 from typing import Any
 
 import torch
-import yaml
 from torch.amp.autocast_mode import autocast
 from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader, Dataset, Sampler
@@ -36,7 +35,6 @@ from hiho_pytorch_base.utility.train_utility import (
     SaveManager,
     reduce_result,
 )
-from hiho_pytorch_base.utility.upath_utility import to_local_path
 
 
 def _delete_data_num(output: DataNumProtocol) -> dict[str, Any]:
@@ -95,7 +93,7 @@ class TrainingContext:
     device: str
     epoch: int
     iteration: int
-    snapshot_path: Path
+    snapshot_path: UPath
     close_prefetch: Callable[[], None]
 
 
@@ -156,11 +154,11 @@ def create_data_loader(
 
 
 def setup_training_context(
-    config_yaml_path: UPath, output_dir: Path
+    config_yaml_path: UPath, output_dir: UPath
 ) -> TrainingContext:
     """TrainingContextを作成"""
     # config
-    config = Config.from_dict(yaml.safe_load(config_yaml_path.read_text()))
+    config = Config.load(config_yaml_path)
     config.add_git_info()
     config.validate_config()
 
@@ -209,7 +207,8 @@ def setup_training_context(
     device = "cuda" if config.train.use_gpu else "cpu"
     if config.train.pretrained_predictor_path is not None:
         state_dict = torch.load(
-            to_local_path(config.train.pretrained_predictor_path), map_location=device
+            BytesIO(config.train.pretrained_predictor_path.read_bytes()),
+            map_location=device,
         )
         predictor.load_state_dict(state_dict)
     print("predictor:", predictor)
@@ -278,7 +277,9 @@ def setup_training_context(
 
 def load_snapshot(context: TrainingContext) -> None:
     """学習状態を復元"""
-    snapshot = torch.load(context.snapshot_path, map_location=context.device)
+    snapshot = torch.load(
+        BytesIO(context.snapshot_path.read_bytes()), map_location=context.device
+    )
 
     context.model.load_state_dict(snapshot["model"])
     context.optimizer.load_state_dict(snapshot["optimizer"])
@@ -438,12 +439,12 @@ def training_loop(context: TrainingContext) -> None:
             save_snapshot(context)
 
 
-def train(config_yaml_path: UPath, output_dir: Path) -> None:
+def train(config_yaml_path: UPath, output_dir: UPath) -> None:
     """機械学習モデルを学習する。スナップショットがあれば再開する。"""
     context = setup_training_context(config_yaml_path, output_dir)
 
     output_dir.mkdir(exist_ok=True, parents=True)
-    (output_dir / "config.yaml").write_text(yaml.safe_dump(context.config.to_dict()))
+    context.config.save(output_dir / "config.yaml")
 
     if context.snapshot_path.exists():
         load_snapshot(context)
@@ -461,5 +462,5 @@ def train(config_yaml_path: UPath, output_dir: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("config_yaml_path", type=UPath)
-    parser.add_argument("output_dir", type=Path)
+    parser.add_argument("output_dir", type=UPath)
     train(**vars(parser.parse_args()))

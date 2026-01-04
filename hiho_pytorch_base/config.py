@@ -2,10 +2,12 @@
 
 from typing import Any, Self
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
+from upath import UPath
 
 from .utility.git_utility import get_branch_name, get_commit_id
-from .utility.upath_utility import UPathField
+from .utility.upath_utility import UPathField, to_local_path
 
 
 class _Model(BaseModel):
@@ -101,9 +103,18 @@ class Config(_Model):
         backward_compatible(d)
         return cls.model_validate(d)
 
+    @staticmethod
+    def load(config_path: UPath) -> "Config":
+        """設定ファイルから読み込む"""
+        return Config.from_dict(yaml.safe_load(to_local_path(config_path).read_text()))
+
     def to_dict(self) -> dict[str, Any]:
         """辞書に変換"""
         return self.model_dump(mode="json")
+
+    def save(self, config_path: UPath) -> None:
+        """設定ファイルに保存する"""
+        config_path.write_text(yaml.safe_dump(self.to_dict()))
 
     def validate_config(self) -> None:
         """設定の妥当性を検証"""

@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-import yaml
 from upath import UPath
 
 from hiho_pytorch_base.config import Config
@@ -15,8 +14,7 @@ def test_export_onnx_basic(train_config: Config, tmp_path: Path) -> None:
     config_path = tmp_path / "test_config.yaml"
     output_path = tmp_path / "test_model.onnx"
 
-    with config_path.open("w") as f:
-        yaml.dump(train_config.to_dict(), f)
+    train_config.save(UPath(config_path))
 
     export_onnx(UPath(config_path), output_path, verbose=False)
 

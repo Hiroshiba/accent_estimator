@@ -4,7 +4,6 @@ import argparse
 from pathlib import Path
 
 import torch
-import yaml
 from torch import Tensor, nn
 from upath import UPath
 
@@ -38,7 +37,7 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
     """設定からPredictorを作成してONNX形式でエクスポートする"""
     output_path.parent.mkdir(exist_ok=True, parents=True)
 
-    config = Config.from_dict(yaml.safe_load(config_yaml_path.read_text()))
+    config = Config.load(config_yaml_path)
 
     predictor = create_predictor(config.network)
     wrapper = PredictorWrapper(predictor)

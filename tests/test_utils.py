@@ -5,7 +5,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
-import yaml
 from upath import UPath
 
 from hiho_pytorch_base.config import Config
@@ -14,10 +13,7 @@ from hiho_pytorch_base.data.sampling_data import SamplingData
 
 def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
     """テストデータをセットアップし、設定を作る"""
-    with base_config_path.open() as f:
-        config_dict = yaml.safe_load(f)
-
-    config = Config.from_dict(config_dict)
+    config = Config.load(UPath(base_config_path))
     assert config.dataset.valid is not None
 
     config.dataset.train.root_dir = data_dir

@@ -15,7 +15,6 @@ import japanize_matplotlib  # noqa: F401 日本語フォントに必須
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import yaml
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from upath import UPath
@@ -62,7 +61,7 @@ class VisualizationApp:
 
     def _create_dataset(self) -> DatasetCollection:
         """データセットを作成"""
-        config = Config.from_dict(yaml.safe_load(self.config_path.read_text()))
+        config = Config.load(self.config_path)
         return create_dataset(config.dataset)
 
     def _get_output_data(self, index: int, dataset_type: DatasetType) -> OutputData:

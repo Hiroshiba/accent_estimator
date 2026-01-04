@@ -4,7 +4,6 @@ import argparse
 import re
 from pathlib import Path
 
-import yaml
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from upath import UPath
@@ -60,7 +59,7 @@ def generate(
     output_dir.mkdir(parents=True, exist_ok=True)
     save_arguments(output_dir / "arguments.yaml", generate, locals())
 
-    config = Config.from_dict(yaml.safe_load(config_path.read_text()))
+    config = Config.load(config_path)
 
     generator = Generator(
         config=config, predictor=to_local_path(predictor_path), use_gpu=use_gpu

@@ -8,7 +8,6 @@ import shutil
 from pathlib import Path
 
 import pytest
-import yaml
 from upath import UPath
 
 from hiho_pytorch_base.config import Config
@@ -60,8 +59,7 @@ def test_e2e_train(train_config: Config, train_output_dir: UPath) -> None:
         shutil.rmtree(output_dir)
 
     config_path = train_output_dir / "config.yaml"
-    with config_path.open("w") as f:
-        yaml.dump(train_config.to_dict(), f)
+    train_config.save(config_path)
 
     train(config_path, output_dir)
 

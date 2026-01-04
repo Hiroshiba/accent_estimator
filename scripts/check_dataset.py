@@ -6,7 +6,6 @@ import os
 import traceback
 from functools import partial
 
-import yaml
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from upath import UPath
@@ -18,7 +17,7 @@ from hiho_pytorch_base.dataset import Dataset, create_dataset
 
 def check_dataset(config_yaml_path: UPath, trials: int, break_on_error: bool) -> None:
     """データセットの整合性をチェックする"""
-    config = Config.from_dict(yaml.safe_load(config_yaml_path.read_text()))
+    config = Config.load(config_yaml_path)
 
     preprocess_workers = config.train.preprocess_workers
     batch_size = config.train.batch_size
