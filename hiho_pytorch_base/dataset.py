@@ -158,7 +158,9 @@ PathMap = dict[str, UPath]
 
 def _load_pathlist(pathlist_path: UPath, root_dir: UPath) -> PathMap:
     """pathlistファイルを読み込みんでパスマップを返す。"""
-    path_list = [root_dir / p for p in pathlist_path.read_text().splitlines()]
+    path_list = [
+        root_dir / p for p in to_local_path(pathlist_path).read_text().splitlines()
+    ]
     return {p.stem: p for p in path_list}
 
 
@@ -216,7 +218,7 @@ def get_datas(config: DataFileConfig) -> list[LazyInputData]:
     )
 
     fn_each_speaker = TypeAdapter(dict[str, list[str]]).validate_json(
-        config.speaker_dict_path.read_text()
+        to_local_path(config.speaker_dict_path).read_text()
     )
     speaker_ids = {
         fn: speaker_id
