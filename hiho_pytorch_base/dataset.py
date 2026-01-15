@@ -1,12 +1,16 @@
 """データセットモジュール"""
 
+import hashlib
 import random
+import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import assert_never
 
+import h5py
 import numpy
 from pydantic import TypeAdapter
 from torch.utils.data import Dataset as BaseDataset
@@ -29,9 +33,77 @@ class LazyInputData:
     target_variable_path: UPath
     target_scalar_path: UPath
     speaker_id: int
+    hdf5_cache_dir: UPath | None
 
-    def fetch(self) -> InputData:
-        """ファイルからデータを読み込んでInputDataを生成"""
+    def _generate_hdf5_cache_filename(self) -> str:
+        paths_str = "\n".join(
+            [
+                str(self.feature_vector_path),
+                str(self.feature_variable_path),
+                str(self.target_vector_path),
+                str(self.target_variable_path),
+                str(self.target_scalar_path),
+            ]
+        )
+        hash_value = hashlib.sha256(paths_str.encode()).hexdigest()
+        return f"{hash_value}.h5"
+
+    def _get_hdf5_cache_path(self) -> UPath:
+        if self.hdf5_cache_dir is None:
+            raise RuntimeError("hdf5_cache_dirがNoneです")
+        filename = self._generate_hdf5_cache_filename()
+        return self.hdf5_cache_dir / filename
+
+    def _get_manifest(self) -> dict[str, str]:
+        return {
+            "feature_vector_path": str(self.feature_vector_path),
+            "feature_variable_path": str(self.feature_variable_path),
+            "target_vector_path": str(self.target_vector_path),
+            "target_variable_path": str(self.target_variable_path),
+            "target_scalar_path": str(self.target_scalar_path),
+        }
+
+    def _write_hdf5_cache(self, d: InputData) -> None:
+        cache_path = self._get_hdf5_cache_path()
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as tmp:
+            local_path = Path(tmp.name)
+
+        with h5py.File(local_path, "w") as f:
+            f.create_dataset("feature_vector", data=d.feature_vector)
+            f.create_dataset("feature_variable", data=d.feature_variable)
+            f.create_dataset("target_vector_array", data=d.target_vector.array)
+            f.create_dataset("target_vector_rate", data=d.target_vector.rate)
+            f.create_dataset("target_variable_array", data=d.target_variable.array)
+            f.create_dataset("target_variable_rate", data=d.target_variable.rate)
+            f.create_dataset("target_scalar", data=d.target_scalar)
+            manifest = self._get_manifest()
+            for key, value in manifest.items():
+                f.attrs[f"manifest_{key}"] = value
+
+        cache_path.write_bytes(local_path.read_bytes())
+        local_path.unlink()
+
+    @staticmethod
+    def _read_hdf5_cache(cache_path: Path, speaker_id: int) -> InputData:
+        with h5py.File(cache_path, "r") as f:
+            return InputData(
+                feature_vector=numpy.array(f["feature_vector"]),
+                feature_variable=numpy.array(f["feature_variable"]),
+                target_vector=SamplingData(
+                    array=numpy.array(f["target_vector_array"]),
+                    rate=float(numpy.array(f["target_vector_rate"])),
+                ),
+                target_variable=SamplingData(
+                    array=numpy.array(f["target_variable_array"]),
+                    rate=float(numpy.array(f["target_variable_rate"])),
+                ),
+                target_scalar=float(numpy.array(f["target_scalar"])),
+                speaker_id=speaker_id,
+            )
+
+    def _fetch_from_files(self) -> InputData:
         return InputData(
             feature_vector=numpy.load(
                 to_local_path(self.feature_vector_path), allow_pickle=True
@@ -46,6 +118,20 @@ class LazyInputData:
             ),
             speaker_id=self.speaker_id,
         )
+
+    def fetch(self) -> InputData:
+        """ファイルからデータを読み込んでInputDataを生成"""
+        if self.hdf5_cache_dir is None:
+            return self._fetch_from_files()
+
+        cache_path = self._get_hdf5_cache_path()
+        if cache_path.exists():
+            local_cache = to_local_path(cache_path)
+            return self._read_hdf5_cache(local_cache, self.speaker_id)
+
+        input_data = self._fetch_from_files()
+        self._write_hdf5_cache(input_data)
+        return input_data
 
 
 def prefetch_datas(
@@ -153,7 +239,9 @@ class DatasetCollection:
                 assert_never(type)
 
 
-def get_datas(config: DataFileConfig) -> list[LazyInputData]:
+def get_datas(
+    config: DataFileConfig, hdf5_cache_dir: UPath | None
+) -> list[LazyInputData]:
     """データを取得"""
     (
         fn_list,
@@ -192,6 +280,7 @@ def get_datas(config: DataFileConfig) -> list[LazyInputData]:
             target_variable_path=target_variable_pathmappings[fn],
             target_scalar_path=target_scalar_pathmappings[fn],
             speaker_id=speaker_ids[fn],
+            hdf5_cache_dir=hdf5_cache_dir,
         )
         for fn in fn_list
     ]
@@ -200,8 +289,7 @@ def get_datas(config: DataFileConfig) -> list[LazyInputData]:
 
 def create_dataset(config: DatasetConfig) -> DatasetCollection:
     """データセットを作成"""
-    # TODO: accent_estimatorのようにHDF5に対応させ、docs/にドキュメントを書く
-    datas = get_datas(config.train)
+    datas = get_datas(config.train, config.hdf5_cache_dir)
 
     if config.seed is not None:
         random.Random(config.seed).shuffle(datas)
@@ -221,7 +309,7 @@ def create_dataset(config: DatasetConfig) -> DatasetCollection:
         test=_wrapper(tests, is_eval=False),
         eval=(_wrapper(tests, is_eval=True) if config.eval_for_test else None),
         valid=(
-            _wrapper(get_datas(config.valid), is_eval=True)
+            _wrapper(get_datas(config.valid, config.hdf5_cache_dir), is_eval=True)
             if config.valid is not None
             else None
         ),

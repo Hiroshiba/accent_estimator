@@ -18,6 +18,7 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
 
     config.dataset.train.root_dir = data_dir
     config.dataset.valid.root_dir = data_dir
+    config.dataset.hdf5_cache_dir = data_dir / "hdf5_cache"
 
     root_dir = config.dataset.train.root_dir
     train_num, valid_num = 30, 10

@@ -15,6 +15,7 @@ dataset:
     target_scalar_pathlist_path: "tests/data/test_data/valid_target_scalar_pathlist.txt"
     speaker_dict_path: "tests/data/test_data/speaker_dict.json"
     root_dir: "tests/data/test_data"
+  hdf5_cache_dir: null
   train_num: null
   test_num: 10
   eval_for_test: true
