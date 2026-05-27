@@ -7,8 +7,8 @@ import torch
 from torch import ScriptModule, Tensor, nn
 from typing_extensions import TypedDict
 
-from accent_estimator.config import Config
-from accent_estimator.network.predictor import Predictor, create_predictor
+from .config import Config
+from .network.predictor import Predictor, create_predictor
 
 
 class GeneratorOutput(TypedDict):
@@ -31,7 +31,7 @@ class Generator(nn.Module):
     def __init__(
         self,
         config: Config,
-        predictor: Predictor | str | Path | BytesIO,
+        predictor: Predictor | ScriptModule | str | Path | BytesIO,
         use_gpu: bool,
     ):
         super().__init__()

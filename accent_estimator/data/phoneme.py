@@ -1,12 +1,12 @@
 from abc import abstractmethod
 from pathlib import Path
-from typing import List, Sequence
+from typing import Self
 
 import numpy
 
 
 class BasePhoneme(object):
-    phoneme_list: Sequence[str]
+    phoneme_list: tuple[str, ...]
     num_phoneme: int
     space_phoneme: str
 
@@ -61,11 +61,11 @@ class BasePhoneme(object):
 
     @classmethod
     @abstractmethod
-    def convert(cls, phonemes: List["BasePhoneme"]) -> List["BasePhoneme"]:
+    def convert(cls, phonemes: list[Self]) -> list[Self]:
         pass
 
     @classmethod
-    def verify_list(cls, phonemes: List["BasePhoneme"]):
+    def verify_list(cls: type[Self], phonemes: list[Self]):
         assert phonemes[0].start == 0, f"{phonemes[0]} start must be 0."
         for phoneme in phonemes:
             phoneme.verify()
@@ -94,7 +94,7 @@ class BasePhoneme(object):
         return phonemes
 
     @classmethod
-    def save_julius_list(cls, phonemes: List["BasePhoneme"], path: Path, verify=True):
+    def save_julius_list(cls, phonemes: list[Self], path: Path, verify=True):
         if verify:
             try:
                 cls.verify_list(phonemes)
@@ -165,7 +165,7 @@ class OjtPhoneme(BasePhoneme):
     space_phoneme = "pau"
 
     @classmethod
-    def convert(cls, phonemes: List["OjtPhoneme"]):
+    def convert(cls, phonemes: list[Self]):
         if "sil" in phonemes[0].phoneme:
             phonemes[0].phoneme = cls.space_phoneme
         if "sil" in phonemes[-1].phoneme:

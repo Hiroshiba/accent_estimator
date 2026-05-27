@@ -181,8 +181,7 @@ def get_datas(config: DatasetFileConfig):
 def create_dataset(config: DatasetConfig):
     grouped_datas = get_datas(config.train_file)
     keys = sorted(grouped_datas.keys())
-    if config.seed is not None:
-        numpy.random.RandomState(config.seed).shuffle(keys)
+    numpy.random.RandomState(config.seed).shuffle(keys)
     if config.train_num is not None:
         keys = keys[: config.test_num + config.train_num]
 
