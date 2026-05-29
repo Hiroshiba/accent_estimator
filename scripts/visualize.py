@@ -50,6 +50,8 @@ class FigureState:
     feature_variable_fig: Figure | None = None
     feature_vector_line: Line2D | None = None
     feature_variable_line: Line2D | None = None
+    target_variable_fig: Figure | None = None
+    target_variable_line: Line2D | None = None
     variable_output_fig: Figure | None = None
     variable_output_pred_line: Line2D | None = None
     variable_output_target_line: Line2D | None = None
@@ -129,6 +131,10 @@ shape: {tuple(output_data.feature_variable.shape)}
 パス: {lazy_data.target_vector_path}
 shape: {tuple(output_data.target_vector.shape)}
 
+可変長ターゲット
+パス: {lazy_data.target_variable_path}
+shape: {tuple(output_data.target_variable.shape)}
+
 回帰ターゲット
 パス: {lazy_data.target_scalar_path}
 shape: {tuple(output_data.target_scalar.shape)}
@@ -179,6 +185,28 @@ shape: {tuple(output_data.target_scalar.shape)}
             self.figure_state.feature_variable_fig.canvas.draw()
 
         return self.figure_state.feature_variable_fig
+
+    def _setup_target_variable_plot(self, data: np.ndarray) -> Figure:
+        if (
+            self.figure_state.target_variable_fig is None
+            or self.figure_state.target_variable_line is None
+        ):
+            self.figure_state.target_variable_fig, ax = plt.subplots(figsize=(10, 4))
+            x_data = range(len(data))
+            (self.figure_state.target_variable_line,) = ax.plot(x_data, data)
+            ax.set_title("可変長ターゲット")
+            ax.set_xlabel("Index")
+            ax.set_ylabel("Value")
+            ax.grid(True)
+        else:
+            x_data = range(len(data))
+            self.figure_state.target_variable_line.set_data(x_data, data)
+            ax = self.figure_state.target_variable_fig.gca()
+            ax.relim()
+            ax.autoscale_view()
+            self.figure_state.target_variable_fig.canvas.draw()
+
+        return self.figure_state.target_variable_fig
 
     def _setup_variable_output_plot(
         self, pred_data: np.ndarray, target_data: np.ndarray
@@ -277,6 +305,12 @@ shape: {tuple(output_data.target_scalar.shape)}
                 feature_vector_plot, feature_variable_plot = self._setup_plots(
                     output_data
                 )
+                target_variable_data = (
+                    output_data.target_variable.cpu().numpy().flatten()
+                )
+                target_variable_plot = self._setup_target_variable_plot(
+                    target_variable_data
+                )
                 data_info = self._create_data_info(output_data, lazy_data)
 
                 with gr.Row():
@@ -309,6 +343,11 @@ shape: {tuple(output_data.target_scalar.shape)}
                             interactive=False,
                         )
 
+                with gr.Row():
+                    with gr.Column():
+                        gr.Markdown("### 可変長ターゲット")
+                        gr.Plot(value=target_variable_plot, label="target_variable")
+
                 generator = self.generator
                 if generator is not None:
                     generator_output = self._run_inference(generator, output_data)
@@ -318,9 +357,8 @@ shape: {tuple(output_data.target_scalar.shape)}
 
                     predicted_class = int(vector_output.argmax())
                     target_class = int(output_data.target_vector.item())
-                    target_variable = output_data.target_variable.cpu().numpy()
                     variable_output_plot = self._setup_variable_output_plot(
-                        variable_output.flatten(), target_variable.flatten()
+                        variable_output.flatten(), target_variable_data
                     )
 
                     gr.Markdown("## 推論結果")
