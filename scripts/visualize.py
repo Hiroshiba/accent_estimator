@@ -19,6 +19,7 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from upath import UPath
 
+from hiho_pytorch_base.batch import collate_dataset_output
 from hiho_pytorch_base.config import Config
 from hiho_pytorch_base.data.data import OutputData
 from hiho_pytorch_base.dataset import (
@@ -27,6 +28,8 @@ from hiho_pytorch_base.dataset import (
     LazyInputData,
     create_dataset,
 )
+from hiho_pytorch_base.generator import Generator, GeneratorOutput
+from hiho_pytorch_base.utility.upath_utility import to_local_path
 
 
 @dataclass
@@ -47,22 +50,55 @@ class FigureState:
     feature_variable_fig: Figure | None = None
     feature_vector_line: Line2D | None = None
     feature_variable_line: Line2D | None = None
+    variable_output_fig: Figure | None = None
+    variable_output_pred_line: Line2D | None = None
+    variable_output_target_line: Line2D | None = None
 
 
 class VisualizationApp:
     """可視化アプリケーション"""
 
-    def __init__(self, config_path: UPath, initial_dataset_type: DatasetType):
+    def __init__(
+        self,
+        config_path: UPath,
+        initial_dataset_type: DatasetType,
+        predictor_path: UPath | None,
+    ):
         self.config_path = config_path
         self.initial_dataset_type = initial_dataset_type
 
+        self.config = Config.load(config_path)
         self.dataset_collection = self._create_dataset()
+        self.generator = (
+            self._create_generator(predictor_path)
+            if predictor_path is not None
+            else None
+        )
         self.figure_state = FigureState()
 
     def _create_dataset(self) -> DatasetCollection:
         """データセットを作成"""
-        config = Config.load(self.config_path)
-        return create_dataset(config.dataset)
+        return create_dataset(self.config.dataset)
+
+    def _create_generator(self, predictor_path: UPath) -> Generator:
+        """推論用のGeneratorを作成"""
+        return Generator(
+            config=self.config,
+            predictor=to_local_path(predictor_path),
+            use_gpu=False,
+        )
+
+    def _run_inference(
+        self, generator: Generator, output_data: OutputData
+    ) -> GeneratorOutput:
+        """OutputDataから推論結果を生成"""
+        batch = collate_dataset_output([output_data])
+        return generator(
+            feature_vector=batch.feature_vector,
+            feature_variable=batch.feature_variable,
+            speaker_id=batch.speaker_id,
+            length=batch.length,
+        )
 
     def _get_output_data(self, index: int, dataset_type: DatasetType) -> OutputData:
         """前処理済みのOutputDataを取得"""
@@ -143,6 +179,40 @@ shape: {tuple(output_data.target_scalar.shape)}
             self.figure_state.feature_variable_fig.canvas.draw()
 
         return self.figure_state.feature_variable_fig
+
+    def _setup_variable_output_plot(
+        self, pred_data: np.ndarray, target_data: np.ndarray
+    ) -> Figure:
+        if (
+            self.figure_state.variable_output_fig is None
+            or self.figure_state.variable_output_pred_line is None
+            or self.figure_state.variable_output_target_line is None
+        ):
+            self.figure_state.variable_output_fig, ax = plt.subplots(figsize=(10, 4))
+            (self.figure_state.variable_output_pred_line,) = ax.plot(
+                range(len(pred_data)), pred_data, label="予測"
+            )
+            (self.figure_state.variable_output_target_line,) = ax.plot(
+                range(len(target_data)), target_data, label="正解"
+            )
+            ax.set_title("可変長出力の予測と正解")
+            ax.set_xlabel("Index")
+            ax.set_ylabel("Value")
+            ax.legend()
+            ax.grid(True)
+        else:
+            self.figure_state.variable_output_pred_line.set_data(
+                range(len(pred_data)), pred_data
+            )
+            self.figure_state.variable_output_target_line.set_data(
+                range(len(target_data)), target_data
+            )
+            ax = self.figure_state.variable_output_fig.gca()
+            ax.relim()
+            ax.autoscale_view()
+            self.figure_state.variable_output_fig.canvas.draw()
+
+        return self.figure_state.variable_output_fig
 
     def _setup_plots(self, output_data: OutputData) -> tuple[Figure, Figure]:
         """プロットを作成または更新"""
@@ -239,6 +309,50 @@ shape: {tuple(output_data.target_scalar.shape)}
                             interactive=False,
                         )
 
+                generator = self.generator
+                if generator is not None:
+                    generator_output = self._run_inference(generator, output_data)
+                    vector_output = generator_output.vector_output[0].cpu().numpy()
+                    variable_output = generator_output.variable_output[0].cpu().numpy()
+                    scalar_output = float(generator_output.scalar_output[0].item())
+
+                    predicted_class = int(vector_output.argmax())
+                    target_class = int(output_data.target_vector.item())
+                    target_variable = output_data.target_variable.cpu().numpy()
+                    variable_output_plot = self._setup_variable_output_plot(
+                        variable_output.flatten(), target_variable.flatten()
+                    )
+
+                    gr.Markdown("## 推論結果")
+                    with gr.Row():
+                        with gr.Column():
+                            gr.Markdown("### 固定長ベクトル出力")
+                            gr.DataFrame(
+                                value=pd.DataFrame(vector_output.reshape(1, -1)),
+                                label="vector_output",
+                            )
+                            gr.Textbox(
+                                value=f"予測クラス {predicted_class} / 正解クラス {target_class}",
+                                label="クラス比較",
+                                interactive=False,
+                            )
+                        with gr.Column():
+                            gr.Markdown("### スカラー出力")
+                            gr.Textbox(
+                                value=f"{scalar_output:.6f}",
+                                label="予測 scalar_output",
+                                interactive=False,
+                            )
+                            gr.Textbox(
+                                value=f"{data_info.target_scalar:.6f}",
+                                label="正解 target_scalar",
+                                interactive=False,
+                            )
+                    with gr.Row():
+                        with gr.Column():
+                            gr.Markdown("### 可変長出力")
+                            gr.Plot(value=variable_output_plot, label="variable_output")
+
                 gr.Markdown("---")
                 gr.Textbox(
                     value=data_info.details,
@@ -294,9 +408,11 @@ shape: {tuple(output_data.target_scalar.shape)}
         demo.launch()
 
 
-def visualize(config_path: UPath, dataset_type: DatasetType) -> None:
+def visualize(
+    config_path: UPath, dataset_type: DatasetType, predictor_path: UPath | None
+) -> None:
     """指定されたデータセットをGradio UIで可視化する"""
-    app = VisualizationApp(config_path, dataset_type)
+    app = VisualizationApp(config_path, dataset_type, predictor_path)
     app.launch()
 
 
@@ -306,6 +422,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset_type", type=DatasetType, required=True, help="データセットタイプ"
     )
+    parser.add_argument(
+        "--predictor_path",
+        type=UPath,
+        help="推論結果を可視化する場合のpredictorモデルパス",
+    )
 
     args = parser.parse_args()
-    visualize(config_path=args.config_path, dataset_type=args.dataset_type)
+    visualize(
+        config_path=args.config_path,
+        dataset_type=args.dataset_type,
+        predictor_path=args.predictor_path,
+    )
