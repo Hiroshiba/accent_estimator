@@ -17,11 +17,12 @@ class _Model(BaseModel):
 class DataFileConfig(_Model):
     """データファイルの設定"""
 
-    feature_vector_pathlist_path: UPathField
-    feature_variable_pathlist_path: UPathField
-    target_vector_pathlist_path: UPathField
-    target_variable_pathlist_path: UPathField
-    target_scalar_pathlist_path: UPathField
+    feature_pathlist_path: UPathField
+    phoneme_list_pathlist_path: UPathField
+    accent_start_pathlist_path: UPathField
+    accent_end_pathlist_path: UPathField
+    accent_phrase_start_pathlist_path: UPathField
+    accent_phrase_end_pathlist_path: UPathField
     speaker_dict_path: UPathField
     root_dir: UPathField | None
 
@@ -37,17 +38,15 @@ class DatasetConfig(_Model):
     eval_for_test: bool
     eval_times_num: int = 1
     seed: int = 0
-    frame_rate: float
-    frame_length: int
 
 
 class NetworkConfig(_Model):
     """ニューラルネットワークの設定"""
 
-    feature_vector_size: int
-    feature_variable_size: int
+    feature_size: int
+    vowel_embedding_size: int
+    frame_reduction_factor: int
     hidden_size: int
-    target_vector_size: int
     conformer_block_num: int
     conformer_dropout_rate: float
     speaker_size: int

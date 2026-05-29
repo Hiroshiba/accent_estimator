@@ -8,7 +8,43 @@ import numpy as np
 from upath import UPath
 
 from hiho_pytorch_base.config import Config
-from hiho_pytorch_base.data.sampling_data import SamplingData
+from hiho_pytorch_base.data.phoneme import OjtPhoneme
+
+_FRAME_RATE = 50
+
+_VOWELS = ("a", "i", "u", "e", "o")
+_CONSONANTS = ("k", "s", "t", "n", "h", "m", "y", "r", "w", "g", "z", "d", "b", "p")
+
+
+def _generate_phoneme_sequence(num_mora: int) -> list[OjtPhoneme]:
+    """ランダムな音素列を生成。pau で挟み、各モーラはオプション子音+母音"""
+    rng = np.random.default_rng()
+
+    phoneme_strs: list[str] = ["pau"]
+    for _ in range(num_mora):
+        if rng.random() < 0.7:
+            phoneme_strs.append(_CONSONANTS[int(rng.integers(0, len(_CONSONANTS)))])
+        phoneme_strs.append(_VOWELS[int(rng.integers(0, len(_VOWELS)))])
+    phoneme_strs.append("pau")
+
+    durations_frames = rng.integers(2, 8, size=len(phoneme_strs))
+    boundaries_frames = np.concatenate([[0], np.cumsum(durations_frames)])
+    boundaries_seconds = boundaries_frames / _FRAME_RATE
+
+    phonemes: list[OjtPhoneme] = []
+    for i, phoneme in enumerate(phoneme_strs):
+        phonemes.append(
+            OjtPhoneme(
+                phoneme=phoneme,
+                start=float(boundaries_seconds[i]),
+                end=float(boundaries_seconds[i + 1]),
+            )
+        )
+    return phonemes
+
+
+def _phonemes_to_julius_text(phonemes: list[OjtPhoneme]) -> str:
+    return "\n".join(f"{p.start:.4f} {p.end:.4f} {p.phoneme}" for p in phonemes)
 
 
 def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
@@ -47,69 +83,72 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
         if not valid_pathlist_path.exists():
             valid_pathlist_path.write_text("\n".join(all_relative_paths[train_num:]))
 
-    # 可変長データの長さを事前に決定
-    variable_lengths = {}
+    # 音素列をstemごとに事前生成
+    phoneme_lists = {}
     for stem in all_stems:
-        variable_lengths[stem] = int(np.random.default_rng().integers(1, 30))
+        num_mora = int(np.random.default_rng().integers(3, 12))
+        phoneme_lists[stem] = _generate_phoneme_sequence(num_mora)
 
-    # 固定長特徴ベクトル
-    def generate_feature_vector(file_path: Path) -> None:
-        feature_vector = (
+    # フレーム特徴量
+    def generate_feature(file_path: Path) -> None:
+        phonemes = phoneme_lists[file_path.stem]
+        total_seconds = phonemes[-1].end
+        frame_length = int(round(total_seconds * _FRAME_RATE))
+        feature = (
             np.random.default_rng()
-            .normal(size=config.network.feature_vector_size)
+            .normal(size=(frame_length, config.network.feature_size))
             .astype(np.float32)
         )
-        np.save(file_path, feature_vector)
+        np.save(file_path, feature)
 
-    _setup_data(generate_feature_vector, "feature_vector", "npy")
+    _setup_data(generate_feature, "feature", "npy")
 
-    # 可変長特徴データ
-    def generate_feature_variable(file_path: Path) -> None:
-        stem = file_path.stem
-        variable_length = variable_lengths[stem]
-        feature_variable = (
-            np.random.default_rng()
-            .normal(size=(variable_length, config.network.feature_variable_size))
-            .astype(np.float32)
+    # 音素ラベル
+    def generate_phoneme_list(file_path: Path) -> None:
+        text = _phonemes_to_julius_text(phoneme_lists[file_path.stem])
+        file_path.write_text(text)
+
+    _setup_data(generate_phoneme_list, "phoneme_list", "lab")
+
+    # アクセント核開始
+    def generate_accent_start(file_path: Path) -> None:
+        phonemes = phoneme_lists[file_path.stem]
+        values = (np.random.default_rng().random(size=len(phonemes)) < 0.2).astype(
+            np.int64
         )
-        np.save(file_path, feature_variable)
+        file_path.write_text(" ".join(str(int(v)) for v in values))
 
-    _setup_data(generate_feature_variable, "feature_variable", "npy")
+    _setup_data(generate_accent_start, "accent_start", "txt")
 
-    # サンプリングデータ
-    def generate_target_vector(file_path: Path) -> None:
-        array_length = config.dataset.frame_length
-        array = np.random.default_rng().integers(
-            0, config.network.target_vector_size, size=array_length, dtype=np.int64
+    # アクセント核終了
+    def generate_accent_end(file_path: Path) -> None:
+        phonemes = phoneme_lists[file_path.stem]
+        values = (np.random.default_rng().random(size=len(phonemes)) < 0.2).astype(
+            np.int64
         )
-        sampling_data = SamplingData(array=array, rate=config.dataset.frame_rate)
-        sampling_data.save(file_path)
+        file_path.write_text(" ".join(str(int(v)) for v in values))
 
-    _setup_data(generate_target_vector, "target_vector", "npy")
+    _setup_data(generate_accent_end, "accent_end", "txt")
 
-    # 可変長回帰ターゲット
-    def generate_target_variable(file_path: Path) -> None:
-        stem = file_path.stem
-        variable_length = variable_lengths[stem]
-        array = (
-            np.random.default_rng()
-            .normal(size=(variable_length, config.network.target_vector_size))
-            .astype(np.float32)
+    # アクセント句開始
+    def generate_accent_phrase_start(file_path: Path) -> None:
+        phonemes = phoneme_lists[file_path.stem]
+        values = (np.random.default_rng().random(size=len(phonemes)) < 0.1).astype(
+            np.int64
         )
-        sampling_data = SamplingData(array=array, rate=1.0)
-        sampling_data.save(file_path)
+        file_path.write_text(" ".join(str(int(v)) for v in values))
 
-    _setup_data(generate_target_variable, "target_variable", "npy")
+    _setup_data(generate_accent_phrase_start, "accent_phrase_start", "txt")
 
-    # 回帰ターゲット
-    def generate_target_scalar(file_path: Path) -> None:
-        target_class = np.random.default_rng().integers(
-            0, config.network.target_vector_size, dtype=np.int64
+    # アクセント句終了
+    def generate_accent_phrase_end(file_path: Path) -> None:
+        phonemes = phoneme_lists[file_path.stem]
+        values = (np.random.default_rng().random(size=len(phonemes)) < 0.1).astype(
+            np.int64
         )
-        target_scalar = float(target_class) + np.random.default_rng().normal() * 0.1
-        np.save(file_path, target_scalar)
+        file_path.write_text(" ".join(str(int(v)) for v in values))
 
-    _setup_data(generate_target_scalar, "target_scalar", "npy")
+    _setup_data(generate_accent_phrase_end, "accent_phrase_end", "txt")
 
     # 話者マッピング
     speaker_names = ["A", "B", "C"]

@@ -8,6 +8,8 @@ from torch import Tensor, nn
 
 from .batch import BatchOutput
 from .generator import Generator, GeneratorOutput
+from .model import _precision_recall
+from .network.transformer.utility import make_non_pad_mask
 from .utility.pytorch_utility import detach_cpu
 from .utility.train_utility import DataNumProtocol
 
@@ -17,18 +19,34 @@ class EvaluatorOutput(DataNumProtocol):
     """評価値"""
 
     loss: Tensor
-    accuracy: Tensor
+    precision_accent_start: Tensor
+    precision_accent_end: Tensor
+    precision_accent_phrase_start: Tensor
+    precision_accent_phrase_end: Tensor
+    recall_accent_start: Tensor
+    recall_accent_end: Tensor
+    recall_accent_phrase_start: Tensor
+    recall_accent_phrase_end: Tensor
 
     def detach_cpu(self) -> Self:
         """全てのTensorをdetachしてCPUに移動"""
         self.loss = detach_cpu(self.loss)
-        self.accuracy = detach_cpu(self.accuracy)
+        self.precision_accent_start = detach_cpu(self.precision_accent_start)
+        self.precision_accent_end = detach_cpu(self.precision_accent_end)
+        self.precision_accent_phrase_start = detach_cpu(
+            self.precision_accent_phrase_start
+        )
+        self.precision_accent_phrase_end = detach_cpu(self.precision_accent_phrase_end)
+        self.recall_accent_start = detach_cpu(self.recall_accent_start)
+        self.recall_accent_end = detach_cpu(self.recall_accent_end)
+        self.recall_accent_phrase_start = detach_cpu(self.recall_accent_phrase_start)
+        self.recall_accent_phrase_end = detach_cpu(self.recall_accent_phrase_end)
         return self
 
 
 def calculate_value(output: EvaluatorOutput) -> Tensor:
     """評価値の良し悪しを計算する関数。高いほど良い。"""
-    return output.accuracy
+    return -output.loss
 
 
 class Evaluator(nn.Module):
@@ -41,25 +59,46 @@ class Evaluator(nn.Module):
     @torch.no_grad()
     def forward(self, batch: BatchOutput) -> EvaluatorOutput:
         """データをネットワークに入力して評価値を計算する"""
-        target = batch.target_vector  # (B,)
-
         output_result: GeneratorOutput = self.generator(
-            feature_vector=batch.feature_vector,
-            feature_variable=batch.feature_variable,
+            vowel=batch.vowel,
+            feature=batch.feature,
+            mora_index=batch.mora_index,
             speaker_id=batch.speaker_id,
-            length=batch.length,
+            mora_length=batch.mora_length,
+            frame_length=batch.frame_length,
         )
 
-        output = output_result.vector_output  # (B, ?)
+        output = output_result.accent_logit  # (B, max(mL), 2, 4)
+        max_mora_length = output.size(1)
+        mora_mask = make_non_pad_mask(batch.mora_length).to(output.device)
 
-        loss = torch.nn.functional.cross_entropy(output, target)
+        flat_output = output[mora_mask]  # (sum(mL), 2, 4)
+        flat_target = batch.accent[:, :max_mora_length][mora_mask]  # (sum(mL), 4)
 
-        indexes = torch.argmax(output, dim=1)  # (B,)
-        correct = torch.eq(indexes, target).view(-1)  # (B,)
-        accuracy = correct.float().mean()
+        loss = torch.nn.functional.cross_entropy(flat_output, flat_target)
+
+        precision_accent_start, recall_accent_start = _precision_recall(
+            flat_output[:, :, 0], flat_target[:, 0]
+        )
+        precision_accent_end, recall_accent_end = _precision_recall(
+            flat_output[:, :, 1], flat_target[:, 1]
+        )
+        precision_accent_phrase_start, recall_accent_phrase_start = _precision_recall(
+            flat_output[:, :, 2], flat_target[:, 2]
+        )
+        precision_accent_phrase_end, recall_accent_phrase_end = _precision_recall(
+            flat_output[:, :, 3], flat_target[:, 3]
+        )
 
         return EvaluatorOutput(
             loss=loss,
-            accuracy=accuracy,
+            precision_accent_start=precision_accent_start,
+            precision_accent_end=precision_accent_end,
+            precision_accent_phrase_start=precision_accent_phrase_start,
+            precision_accent_phrase_end=precision_accent_phrase_end,
+            recall_accent_start=recall_accent_start,
+            recall_accent_end=recall_accent_end,
+            recall_accent_phrase_start=recall_accent_phrase_start,
+            recall_accent_phrase_end=recall_accent_phrase_end,
             data_num=batch.data_num,
         )

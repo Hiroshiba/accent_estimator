@@ -15,38 +15,32 @@ from .utility.pytorch_utility import to_device
 class BatchOutput:
     """バッチ処理後のデータ構造"""
 
-    feature_vector: Tensor  # (B, ?)
-    feature_variable: Tensor  # (B, L, ?)
-    target_vector: Tensor  # (B, ?)
-    target_variable: Tensor  # (B, L, ?)
-    target_scalar: Tensor  # (B,)
+    vowel: Tensor  # (B, max(mL))
+    feature: Tensor  # (B, max(fL), ?)
+    mora_index: Tensor  # (B, max(fL))
+    accent: Tensor  # (B, max(mL), ?)
     speaker_id: Tensor  # (B,)
-    length: Tensor  # (B,)
+    mora_length: Tensor  # (B,)
+    frame_length: Tensor  # (B,)
 
     @property
     def data_num(self) -> int:
         """バッチサイズを返す"""
-        return self.feature_vector.shape[0]
+        return self.vowel.shape[0]
 
     def to_device(self, device: str, non_blocking: bool) -> Self:
         """データを指定されたデバイスに移動"""
-        self.feature_vector = to_device(
-            self.feature_vector, device, non_blocking=non_blocking
-        )
-        self.feature_variable = to_device(
-            self.feature_variable, device, non_blocking=non_blocking
-        )
-        self.target_vector = to_device(
-            self.target_vector, device, non_blocking=non_blocking
-        )
-        self.target_variable = to_device(
-            self.target_variable, device, non_blocking=non_blocking
-        )
-        self.target_scalar = to_device(
-            self.target_scalar, device, non_blocking=non_blocking
-        )
+        self.vowel = to_device(self.vowel, device, non_blocking=non_blocking)
+        self.feature = to_device(self.feature, device, non_blocking=non_blocking)
+        self.mora_index = to_device(self.mora_index, device, non_blocking=non_blocking)
+        self.accent = to_device(self.accent, device, non_blocking=non_blocking)
         self.speaker_id = to_device(self.speaker_id, device, non_blocking=non_blocking)
-        self.length = to_device(self.length, device, non_blocking=non_blocking)
+        self.mora_length = to_device(
+            self.mora_length, device, non_blocking=non_blocking
+        )
+        self.frame_length = to_device(
+            self.frame_length, device, non_blocking=non_blocking
+        )
         return self
 
 
@@ -61,15 +55,11 @@ def collate_dataset_output(data_list: list[OutputData]) -> BatchOutput:
         raise ValueError("batch is empty")
 
     return BatchOutput(
-        feature_vector=collate_stack([d.feature_vector for d in data_list]),
-        feature_variable=pad_sequence(
-            [d.feature_variable for d in data_list], batch_first=True
-        ),
-        target_vector=collate_stack([d.target_vector for d in data_list]),
-        target_variable=pad_sequence(
-            [d.target_variable for d in data_list], batch_first=True
-        ),
-        target_scalar=collate_stack([d.target_scalar for d in data_list]),
+        vowel=pad_sequence([d.vowel for d in data_list], batch_first=True),
+        feature=pad_sequence([d.feature for d in data_list], batch_first=True),
+        mora_index=pad_sequence([d.mora_index for d in data_list], batch_first=True),
+        accent=pad_sequence([d.accent for d in data_list], batch_first=True),
         speaker_id=collate_stack([d.speaker_id for d in data_list]),
-        length=torch.tensor([d.feature_variable.shape[0] for d in data_list]),
+        mora_length=torch.tensor([d.vowel.shape[0] for d in data_list]),
+        frame_length=torch.tensor([d.feature.shape[0] for d in data_list]),
     )

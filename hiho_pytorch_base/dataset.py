@@ -18,31 +18,38 @@ from upath import UPath
 
 from .config import DataFileConfig, DatasetConfig
 from .data.data import InputData, OutputData, preprocess
-from .data.sampling_data import SamplingData
+from .data.phoneme import OjtPhoneme
 from .utility.pathlist_utility import get_data_paths
 from .utility.upath_utility import to_local_path
+
+
+def _read_bool_list(path: Path) -> list[bool]:
+    """空白区切りで 0/1 が並ぶテキストを bool 配列に変換"""
+    return [bool(int(s)) for s in path.read_text().split()]
 
 
 @dataclass
 class LazyInputData:
     """遅延読み込み対応の入力データ構造"""
 
-    feature_vector_path: UPath
-    feature_variable_path: UPath
-    target_vector_path: UPath
-    target_variable_path: UPath
-    target_scalar_path: UPath
+    feature_path: UPath
+    phoneme_list_path: UPath
+    accent_start_path: UPath
+    accent_end_path: UPath
+    accent_phrase_start_path: UPath
+    accent_phrase_end_path: UPath
     speaker_id: int
     hdf5_cache_dir: UPath | None
 
     def _generate_hdf5_cache_filename(self) -> str:
         paths_str = "\n".join(
             [
-                str(self.feature_vector_path),
-                str(self.feature_variable_path),
-                str(self.target_vector_path),
-                str(self.target_variable_path),
-                str(self.target_scalar_path),
+                str(self.feature_path),
+                str(self.phoneme_list_path),
+                str(self.accent_start_path),
+                str(self.accent_end_path),
+                str(self.accent_phrase_start_path),
+                str(self.accent_phrase_end_path),
             ]
         )
         hash_value = hashlib.sha256(paths_str.encode()).hexdigest()
@@ -56,11 +63,12 @@ class LazyInputData:
 
     def _get_manifest(self) -> dict[str, str]:
         return {
-            "feature_vector_path": str(self.feature_vector_path),
-            "feature_variable_path": str(self.feature_variable_path),
-            "target_vector_path": str(self.target_vector_path),
-            "target_variable_path": str(self.target_variable_path),
-            "target_scalar_path": str(self.target_scalar_path),
+            "feature_path": str(self.feature_path),
+            "phoneme_list_path": str(self.phoneme_list_path),
+            "accent_start_path": str(self.accent_start_path),
+            "accent_end_path": str(self.accent_end_path),
+            "accent_phrase_start_path": str(self.accent_phrase_start_path),
+            "accent_phrase_end_path": str(self.accent_phrase_end_path),
         }
 
     def _write_hdf5_cache(self, d: InputData) -> None:
@@ -71,13 +79,19 @@ class LazyInputData:
             local_path = Path(tmp.name)
 
         with h5py.File(local_path, "w") as f:
-            f.create_dataset("feature_vector", data=d.feature_vector)
-            f.create_dataset("feature_variable", data=d.feature_variable)
-            f.create_dataset("target_vector_array", data=d.target_vector.array)
-            f.create_dataset("target_vector_rate", data=d.target_vector.rate)
-            f.create_dataset("target_variable_array", data=d.target_variable.array)
-            f.create_dataset("target_variable_rate", data=d.target_variable.rate)
-            f.create_dataset("target_scalar", data=d.target_scalar)
+            f.create_dataset("feature", data=d.feature)
+            phoneme_text = "\n".join(
+                f"{p.start:.4f}\t{p.end:.4f}\t{p.phoneme}" for p in d.phoneme_list
+            )
+            f.create_dataset("phoneme_text", data=phoneme_text)
+            f.create_dataset("accent_start", data=numpy.asarray(d.accent_start))
+            f.create_dataset("accent_end", data=numpy.asarray(d.accent_end))
+            f.create_dataset(
+                "accent_phrase_start", data=numpy.asarray(d.accent_phrase_start)
+            )
+            f.create_dataset(
+                "accent_phrase_end", data=numpy.asarray(d.accent_phrase_end)
+            )
             manifest = self._get_manifest()
             for key, value in manifest.items():
                 f.attrs[f"manifest_{key}"] = value
@@ -88,33 +102,37 @@ class LazyInputData:
     @staticmethod
     def _read_hdf5_cache(cache_path: Path, speaker_id: int) -> InputData:
         with h5py.File(cache_path, "r") as f:
+            phoneme_text = numpy.asarray(f["phoneme_text"]).item()
+            assert isinstance(phoneme_text, bytes)
+            phoneme_text = phoneme_text.decode()
+            phoneme_list = OjtPhoneme.loads_julius_list(phoneme_text)
             return InputData(
-                feature_vector=numpy.array(f["feature_vector"]),
-                feature_variable=numpy.array(f["feature_variable"]),
-                target_vector=SamplingData(
-                    array=numpy.array(f["target_vector_array"]),
-                    rate=float(numpy.array(f["target_vector_rate"])),
+                feature=numpy.array(f["feature"]),
+                phoneme_list=phoneme_list,
+                accent_start=numpy.array(f["accent_start"]).astype(bool).tolist(),
+                accent_end=numpy.array(f["accent_end"]).astype(bool).tolist(),
+                accent_phrase_start=(
+                    numpy.array(f["accent_phrase_start"]).astype(bool).tolist()
                 ),
-                target_variable=SamplingData(
-                    array=numpy.array(f["target_variable_array"]),
-                    rate=float(numpy.array(f["target_variable_rate"])),
+                accent_phrase_end=(
+                    numpy.array(f["accent_phrase_end"]).astype(bool).tolist()
                 ),
-                target_scalar=float(numpy.array(f["target_scalar"])),
                 speaker_id=speaker_id,
             )
 
     def _fetch_from_files(self) -> InputData:
         return InputData(
-            feature_vector=numpy.load(
-                to_local_path(self.feature_vector_path), allow_pickle=True
+            feature=numpy.load(to_local_path(self.feature_path), allow_pickle=True),
+            phoneme_list=OjtPhoneme.loads_julius_list(
+                to_local_path(self.phoneme_list_path).read_text()
             ),
-            feature_variable=numpy.load(
-                to_local_path(self.feature_variable_path), allow_pickle=True
+            accent_start=_read_bool_list(to_local_path(self.accent_start_path)),
+            accent_end=_read_bool_list(to_local_path(self.accent_end_path)),
+            accent_phrase_start=_read_bool_list(
+                to_local_path(self.accent_phrase_start_path)
             ),
-            target_vector=SamplingData.load(to_local_path(self.target_vector_path)),
-            target_variable=SamplingData.load(to_local_path(self.target_variable_path)),
-            target_scalar=float(
-                numpy.load(to_local_path(self.target_scalar_path), allow_pickle=True)
+            accent_phrase_end=_read_bool_list(
+                to_local_path(self.accent_phrase_end_path)
             ),
             speaker_id=self.speaker_id,
         )
@@ -183,12 +201,7 @@ class Dataset(BaseDataset[OutputData]):
     def __getitem__(self, i: int) -> OutputData:
         """指定されたインデックスのデータを前処理して返す"""
         try:
-            return preprocess(
-                self.datas[i].fetch(),
-                frame_rate=self.config.frame_rate,
-                frame_length=self.config.frame_length,
-                is_eval=self.is_eval,
-            )
+            return preprocess(self.datas[i].fetch(), is_eval=self.is_eval)
         except Exception as e:
             raise RuntimeError(
                 f"データ処理に失敗しました: index={i} data={self.datas[i]}"
@@ -246,20 +259,22 @@ def get_datas(
     (
         fn_list,
         (
-            feature_vector_pathmappings,
-            feature_variable_pathmappings,
-            target_vector_pathmappings,
-            target_variable_pathmappings,
-            target_scalar_pathmappings,
+            feature_pathmappings,
+            phoneme_list_pathmappings,
+            accent_start_pathmappings,
+            accent_end_pathmappings,
+            accent_phrase_start_pathmappings,
+            accent_phrase_end_pathmappings,
         ),
     ) = get_data_paths(
         config.root_dir,
         [
-            config.feature_vector_pathlist_path,
-            config.feature_variable_pathlist_path,
-            config.target_vector_pathlist_path,
-            config.target_variable_pathlist_path,
-            config.target_scalar_pathlist_path,
+            config.feature_pathlist_path,
+            config.phoneme_list_pathlist_path,
+            config.accent_start_pathlist_path,
+            config.accent_end_pathlist_path,
+            config.accent_phrase_start_pathlist_path,
+            config.accent_phrase_end_pathlist_path,
         ],
     )
 
@@ -274,11 +289,12 @@ def get_datas(
 
     datas = [
         LazyInputData(
-            feature_vector_path=feature_vector_pathmappings[fn],
-            feature_variable_path=feature_variable_pathmappings[fn],
-            target_vector_path=target_vector_pathmappings[fn],
-            target_variable_path=target_variable_pathmappings[fn],
-            target_scalar_path=target_scalar_pathmappings[fn],
+            feature_path=feature_pathmappings[fn],
+            phoneme_list_path=phoneme_list_pathmappings[fn],
+            accent_start_path=accent_start_pathmappings[fn],
+            accent_end_path=accent_end_pathmappings[fn],
+            accent_phrase_start_path=accent_phrase_start_pathmappings[fn],
+            accent_phrase_end_path=accent_phrase_end_pathmappings[fn],
             speaker_id=speaker_ids[fn],
             hdf5_cache_dir=hdf5_cache_dir,
         )

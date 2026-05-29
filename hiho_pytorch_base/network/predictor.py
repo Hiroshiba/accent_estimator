@@ -2,8 +2,10 @@
 
 import torch
 from torch import Tensor, nn
+from torch.nn import functional as F
 
 from ..config import NetworkConfig
+from ..data.data import vowels
 from .conformer.encoder import Encoder
 from .transformer.utility import make_non_pad_mask
 
@@ -13,70 +15,108 @@ class Predictor(nn.Module):
 
     def __init__(
         self,
-        feature_vector_size: int,
-        feature_variable_size: int,
-        hidden_size: int,
-        target_vector_size: int,
+        vowel_size: int,
+        vowel_embedding_size: int,
         speaker_size: int,
         speaker_embedding_size: int,
+        frame_reduction_factor: int,
+        feature_size: int,
+        hidden_size: int,
         encoder: Encoder,
     ):
         super().__init__()
 
+        self.vowel_embedder = nn.Embedding(vowel_size, vowel_embedding_size)
         self.speaker_embedder = nn.Embedding(speaker_size, speaker_embedding_size)
+        self.frame_reduction_factor = frame_reduction_factor
 
-        input_size = feature_variable_size + speaker_embedding_size
-        self.pre_conformer = nn.Linear(input_size, hidden_size)
+        self.pre_mora = nn.Linear(
+            feature_size + vowel_embedding_size + speaker_embedding_size, hidden_size
+        )
         self.encoder = encoder
-
-        self.feature_vector_processor = nn.Linear(feature_vector_size, hidden_size)
-        self.vector_head = nn.Linear(hidden_size * 2, target_vector_size)
-        self.variable_head = nn.Linear(hidden_size, target_vector_size)
-        self.scalar_head = nn.Linear(hidden_size * 2, 1)
+        self.post = nn.Linear(hidden_size, 4 * 2)
 
     def forward(  # noqa: D102
         self,
         *,
-        feature_vector: Tensor,  # (B, ?)
-        feature_variable: Tensor,  # (B, L, ?)
+        vowel: Tensor,  # (B, max(mL))
+        feature: Tensor,  # (B, max(fL), ?)
+        mora_index: Tensor,  # (B, max(fL))
         speaker_id: Tensor,  # (B,)
-        length: Tensor,  # (B,)
-    ) -> tuple[Tensor, Tensor, Tensor]:  # (B, ?), (B, L, ?), (B,)
-        device = feature_vector.device
-        batch_size = feature_vector.size(0)
+        mora_length: Tensor,  # (B,)
+        frame_length: Tensor,  # (B,)
+    ) -> Tensor:  # (B, max(mL), 2, 4)
+        if self.frame_reduction_factor > 1:
+            reduced_feature = F.avg_pool1d(
+                feature.transpose(1, 2),
+                kernel_size=self.frame_reduction_factor,
+                stride=self.frame_reduction_factor,
+            ).transpose(1, 2)  # (B, max(fL)//r, ?)
+            reduced_frame_length = frame_length // self.frame_reduction_factor
+            reduced_mora_index = (
+                mora_index[:, : reduced_feature.size(1)] // self.frame_reduction_factor
+            )
+        else:
+            reduced_feature = feature
+            reduced_frame_length = frame_length
+            reduced_mora_index = mora_index
 
-        speaker_embedding = self.speaker_embedder(speaker_id)  # (B, ?)
+        mora_feature = self._aggregate_to_mora(
+            feature=reduced_feature,
+            frame_length=reduced_frame_length,
+            mora_index=reduced_mora_index,
+            mora_length=mora_length,
+        )  # (B, max(mL), ?)
 
-        max_length = feature_variable.size(1)
-        speaker_expanded = speaker_embedding.unsqueeze(1).expand(
-            batch_size, max_length, -1
-        )  # (B, L, ?)
+        max_mora_length = mora_feature.size(1)
+        vowel_embed = self.vowel_embedder(vowel[:, :max_mora_length])  # (B, max(mL), ?)
+        speaker_embed = (
+            self.speaker_embedder(speaker_id)
+            .unsqueeze(1)
+            .expand(-1, max_mora_length, -1)
+        )  # (B, max(mL), ?)
 
-        combined_variable = torch.cat(
-            [feature_variable, speaker_expanded], dim=2
-        )  # (B, L, ?)
+        h = torch.cat(
+            [mora_feature, vowel_embed, speaker_embed], dim=2
+        )  # (B, max(mL), ?)
+        h = self.pre_mora(h)  # (B, max(mL), ?)
 
-        h = self.pre_conformer(combined_variable)  # (B, L, ?)
+        mora_mask = (
+            make_non_pad_mask(mora_length).unsqueeze(-2).to(h.device)
+        )  # (B, 1, max(mL))
+        h, _ = self.encoder(x=h, cond=None, mask=mora_mask)  # (B, max(mL), ?)
 
-        mask = make_non_pad_mask(length).unsqueeze(-2).to(device)  # (B, 1, L)
+        output = self.post(h)  # (B, max(mL), 4*2)
+        return output.reshape(output.size(0), output.size(1), 2, 4)
 
-        encoded, _ = self.encoder(x=h, cond=None, mask=mask)  # (B, L, ?)
+    def _aggregate_to_mora(
+        self,
+        feature: Tensor,  # (B, max(fL), ?)
+        frame_length: Tensor,  # (B,)
+        mora_index: Tensor,  # (B, max(fL))
+        mora_length: Tensor,  # (B,)
+    ) -> Tensor:  # (B, max(mL), ?)
+        """フレーム特徴をモーラごとに平均集約する"""
+        batch_size, _, num_feature = feature.shape
+        max_mora_length = int(mora_length.max().item())
+        device = feature.device
 
-        variable_output = self.variable_head(encoded)  # (B, L, ?)
+        frame_mask = make_non_pad_mask(frame_length).to(device)  # (B, max(fL))
+        masked_index = torch.where(
+            frame_mask, mora_index, torch.full_like(mora_index, max_mora_length)
+        )  # (B, max(fL))
 
-        mask_expanded = mask.squeeze(-2).unsqueeze(-1)  # (B, L, 1)
-        masked_encoded = encoded * mask_expanded  # (B, L, ?)
-        variable_sum = masked_encoded.sum(dim=1)  # (B, ?)
-        variable_mean = variable_sum / length.unsqueeze(-1).float()  # (B, ?)
-
-        fixed_features = self.feature_vector_processor(feature_vector)  # (B, ?)
-
-        final_features = torch.cat([fixed_features, variable_mean], dim=1)  # (B, ?)
-
-        vector_output = self.vector_head(final_features)  # (B, ?)
-        scalar_output = self.scalar_head(final_features).squeeze(-1)  # (B,)
-
-        return vector_output, variable_output, scalar_output
+        x = feature.new_zeros(
+            batch_size, max_mora_length + 1, num_feature
+        )  # (B, max(mL)+1, ?)
+        x = x.scatter_reduce(
+            1,
+            masked_index.unsqueeze(-1).expand(-1, -1, num_feature),
+            feature,
+            reduce="mean",
+            include_self=False,
+        )
+        return x[:, :max_mora_length]
 
 
 def create_predictor(config: NetworkConfig) -> Predictor:
@@ -96,11 +136,12 @@ def create_predictor(config: NetworkConfig) -> Predictor:
         feed_forward_kernel_size=3,
     )
     return Predictor(
-        feature_vector_size=config.feature_vector_size,
-        feature_variable_size=config.feature_variable_size,
-        hidden_size=config.hidden_size,
-        target_vector_size=config.target_vector_size,
+        vowel_size=len(vowels),
+        vowel_embedding_size=config.vowel_embedding_size,
         speaker_size=config.speaker_size,
         speaker_embedding_size=config.speaker_embedding_size,
+        frame_reduction_factor=config.frame_reduction_factor,
+        feature_size=config.feature_size,
+        hidden_size=config.hidden_size,
         encoder=encoder,
     )

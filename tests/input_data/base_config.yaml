@@ -1,18 +1,20 @@
 dataset:
   train:
-    feature_vector_pathlist_path: "tests/data/test_data/train_feature_vector_pathlist.txt"
-    feature_variable_pathlist_path: "tests/data/test_data/train_feature_variable_pathlist.txt"
-    target_vector_pathlist_path: "tests/data/test_data/train_target_vector_pathlist.txt"
-    target_variable_pathlist_path: "tests/data/test_data/train_target_variable_pathlist.txt"
-    target_scalar_pathlist_path: "tests/data/test_data/train_target_scalar_pathlist.txt"
+    feature_pathlist_path: "tests/data/test_data/train_feature_pathlist.txt"
+    phoneme_list_pathlist_path: "tests/data/test_data/train_phoneme_list_pathlist.txt"
+    accent_start_pathlist_path: "tests/data/test_data/train_accent_start_pathlist.txt"
+    accent_end_pathlist_path: "tests/data/test_data/train_accent_end_pathlist.txt"
+    accent_phrase_start_pathlist_path: "tests/data/test_data/train_accent_phrase_start_pathlist.txt"
+    accent_phrase_end_pathlist_path: "tests/data/test_data/train_accent_phrase_end_pathlist.txt"
     speaker_dict_path: "tests/data/test_data/speaker_dict.json"
     root_dir: "tests/data/test_data"
   valid:
-    feature_vector_pathlist_path: "tests/data/test_data/valid_feature_vector_pathlist.txt"
-    feature_variable_pathlist_path: "tests/data/test_data/valid_feature_variable_pathlist.txt"
-    target_vector_pathlist_path: "tests/data/test_data/valid_target_vector_pathlist.txt"
-    target_variable_pathlist_path: "tests/data/test_data/valid_target_variable_pathlist.txt"
-    target_scalar_pathlist_path: "tests/data/test_data/valid_target_scalar_pathlist.txt"
+    feature_pathlist_path: "tests/data/test_data/valid_feature_pathlist.txt"
+    phoneme_list_pathlist_path: "tests/data/test_data/valid_phoneme_list_pathlist.txt"
+    accent_start_pathlist_path: "tests/data/test_data/valid_accent_start_pathlist.txt"
+    accent_end_pathlist_path: "tests/data/test_data/valid_accent_end_pathlist.txt"
+    accent_phrase_start_pathlist_path: "tests/data/test_data/valid_accent_phrase_start_pathlist.txt"
+    accent_phrase_end_pathlist_path: "tests/data/test_data/valid_accent_phrase_end_pathlist.txt"
     speaker_dict_path: "tests/data/test_data/speaker_dict.json"
     root_dir: "tests/data/test_data"
   hdf5_cache_dir: null
@@ -21,14 +23,12 @@ dataset:
   eval_for_test: true
   eval_times_num: 1
   seed: 42
-  frame_rate: 10.0
-  frame_length: 50
 
 network:
-  feature_vector_size: 8
-  feature_variable_size: 16
+  feature_size: 8
+  vowel_embedding_size: 4
+  frame_reduction_factor: 1
   hidden_size: 16
-  target_vector_size: 3
   conformer_block_num: 2
   conformer_dropout_rate: 0.1
   speaker_size: 3

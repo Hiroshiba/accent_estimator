@@ -8,7 +8,6 @@
 
 import argparse
 from dataclasses import dataclass
-from typing import Any
 
 import gradio as gr
 import japanize_matplotlib  # noqa: F401 日本語フォントに必須
@@ -16,11 +15,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
-from matplotlib.lines import Line2D
 from upath import UPath
 
 from hiho_pytorch_base.config import Config
-from hiho_pytorch_base.data.data import OutputData
+from hiho_pytorch_base.data.data import OutputData, mora_phoneme_list, vowels
 from hiho_pytorch_base.dataset import (
     DatasetCollection,
     DatasetType,
@@ -28,13 +26,21 @@ from hiho_pytorch_base.dataset import (
     create_dataset,
 )
 
+accent_channel_names = (
+    "アクセント核開始",
+    "アクセント核終了",
+    "アクセント句開始",
+    "アクセント句終了",
+)
+
 
 @dataclass
 class DataInfo:
     """データ情報"""
 
-    target_vector: np.ndarray
-    target_scalar: float
+    consonant: list[str]
+    vowel: np.ndarray
+    accent: np.ndarray
     speaker_id: int
     details: str
 
@@ -43,10 +49,8 @@ class DataInfo:
 class FigureState:
     """図の状態"""
 
-    feature_vector_fig: Figure | None = None
-    feature_variable_fig: Figure | None = None
-    feature_vector_line: Line2D | None = None
-    feature_variable_line: Line2D | None = None
+    feature_fig: Figure | None = None
+    accent_fig: Figure | None = None
 
 
 class VisualizationApp:
@@ -81,93 +85,105 @@ class VisualizationApp:
         return f"""
 設定ファイル: {self.config_path}
 
-固定長特徴ベクトル
-パス: {lazy_data.feature_vector_path}
-shape: {tuple(output_data.feature_vector.shape)}
+フレーム特徴量
+パス: {lazy_data.feature_path}
+shape: {tuple(output_data.feature.shape)}
 
-可変長特徴データ
-パス: {lazy_data.feature_variable_path}
-shape: {tuple(output_data.feature_variable.shape)}
+母音列
+パス: {lazy_data.phoneme_list_path}
+shape: {tuple(output_data.vowel.shape)}
 
-サンプリングデータ
-パス: {lazy_data.target_vector_path}
-shape: {tuple(output_data.target_vector.shape)}
+アクセント核開始
+パス: {lazy_data.accent_start_path}
 
-回帰ターゲット
-パス: {lazy_data.target_scalar_path}
-shape: {tuple(output_data.target_scalar.shape)}
+アクセント核終了
+パス: {lazy_data.accent_end_path}
+
+アクセント句開始
+パス: {lazy_data.accent_phrase_start_path}
+
+アクセント句終了
+パス: {lazy_data.accent_phrase_end_path}
+
+shape: {tuple(output_data.accent.shape)}
 
 話者ID: {output_data.speaker_id.item()}
 """
 
-    def _setup_feature_vector_plot(self, data: np.ndarray) -> Figure:
-        if (
-            self.figure_state.feature_vector_fig is None
-            or self.figure_state.feature_vector_line is None
-        ):
-            self.figure_state.feature_vector_fig, ax = plt.subplots(figsize=(10, 4))
-            x_data = range(len(data))
-            (self.figure_state.feature_vector_line,) = ax.plot(x_data, data)
-            ax.set_title("固定長特徴ベクトル")
-            ax.set_xlabel("Index")
-            ax.set_ylabel("Value")
-            ax.grid(True)
-        else:
-            x_data = range(len(data))
-            self.figure_state.feature_vector_line.set_data(x_data, data)
-            ax = self.figure_state.feature_vector_fig.gca()
-            ax.relim()
-            ax.autoscale_view()
-            self.figure_state.feature_vector_fig.canvas.draw()
+    def _setup_feature_plot(self, data: np.ndarray) -> Figure:
+        if self.figure_state.feature_fig is not None:
+            plt.close(self.figure_state.feature_fig)
 
-        return self.figure_state.feature_vector_fig
+        fig, ax = plt.subplots(figsize=(10, 4))
+        im = ax.imshow(data.T, aspect="auto", origin="lower", interpolation="nearest")
+        ax.set_title("フレーム特徴量")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Feature")
+        fig.colorbar(im, ax=ax)
 
-    def _setup_feature_variable_plot(self, data: np.ndarray) -> Figure:
-        if (
-            self.figure_state.feature_variable_fig is None
-            or self.figure_state.feature_variable_line is None
-        ):
-            self.figure_state.feature_variable_fig, ax = plt.subplots(figsize=(10, 4))
-            x_data = range(len(data))
-            (self.figure_state.feature_variable_line,) = ax.plot(x_data, data)
-            ax.set_title("可変長特徴データ")
-            ax.set_xlabel("Index")
-            ax.set_ylabel("Value")
-            ax.grid(True)
-        else:
-            x_data = range(len(data))
-            self.figure_state.feature_variable_line.set_data(x_data, data)
-            ax = self.figure_state.feature_variable_fig.gca()
-            ax.relim()
-            ax.autoscale_view()
-            self.figure_state.feature_variable_fig.canvas.draw()
+        self.figure_state.feature_fig = fig
+        return fig
 
-        return self.figure_state.feature_variable_fig
+    def _setup_accent_plot(self, data: np.ndarray) -> Figure:
+        if self.figure_state.accent_fig is not None:
+            plt.close(self.figure_state.accent_fig)
+
+        fig, ax = plt.subplots(figsize=(10, 4))
+        im = ax.imshow(
+            data.T,
+            aspect="auto",
+            origin="lower",
+            interpolation="nearest",
+            vmin=0,
+            vmax=1,
+        )
+        ax.set_title("アクセント")
+        ax.set_xlabel("Mora")
+        ax.set_yticks(range(len(accent_channel_names)))
+        ax.set_yticklabels(accent_channel_names)
+        fig.colorbar(im, ax=ax)
+
+        self.figure_state.accent_fig = fig
+        return fig
 
     def _setup_plots(self, output_data: OutputData) -> tuple[Figure, Figure]:
         """プロットを作成または更新"""
-        # データの取得と整形
-        feature_vector_data = output_data.feature_vector.cpu().numpy().flatten()
-        feature_variable_data = output_data.feature_variable.cpu().numpy().flatten()
+        feature_data = output_data.feature.cpu().numpy()
+        accent_data = output_data.accent.cpu().numpy()
 
-        # figureの更新または作成
-        feature_vector_plot = self._setup_feature_vector_plot(feature_vector_data)
-        feature_variable_plot = self._setup_feature_variable_plot(feature_variable_data)
+        feature_plot = self._setup_feature_plot(feature_data)
+        accent_plot = self._setup_accent_plot(accent_data)
 
-        return (feature_vector_plot, feature_variable_plot)
+        return (feature_plot, accent_plot)
+
+    def _extract_consonant(self, lazy_data: LazyInputData) -> list[str]:
+        """各モーラの子音を音素列から取得し、子音がなければ空文字にする"""
+        phoneme_list = lazy_data.fetch().phoneme_list
+        consonant: list[str] = []
+        for i, p in enumerate(phoneme_list):
+            if p.phoneme not in mora_phoneme_list:
+                continue
+            prev = phoneme_list[i - 1].phoneme if i > 0 else None
+            if prev is not None and prev not in mora_phoneme_list:
+                consonant.append(prev)
+            else:
+                consonant.append("")
+        return consonant
 
     def _create_data_info(
         self, output_data: OutputData, lazy_data: LazyInputData
     ) -> DataInfo:
         """データ情報を作成"""
-        target_vector = output_data.target_vector.cpu().numpy()
-        target_scalar = float(output_data.target_scalar.item())
+        consonant = self._extract_consonant(lazy_data)
+        vowel = output_data.vowel.cpu().numpy()
+        accent = output_data.accent.cpu().numpy()
         speaker_id = int(output_data.speaker_id.item())
         details = self._create_details_text(output_data, lazy_data)
 
         return DataInfo(
-            target_vector=target_vector,
-            target_scalar=target_scalar,
+            consonant=consonant,
+            vowel=vowel,
+            accent=accent,
             speaker_id=speaker_id,
             details=details,
         )
@@ -204,35 +220,34 @@ shape: {tuple(output_data.target_scalar.shape)}
                 output_data = self._get_output_data(index, dataset_type)
                 lazy_data = self._get_lazy_data(index, dataset_type)
 
-                feature_vector_plot, feature_variable_plot = self._setup_plots(
-                    output_data
-                )
+                feature_plot, accent_plot = self._setup_plots(output_data)
                 data_info = self._create_data_info(output_data, lazy_data)
 
                 with gr.Row():
                     with gr.Column():
-                        gr.Markdown("### 固定長特徴ベクトル")
-                        gr.Plot(value=feature_vector_plot, label="feature_vector")
+                        gr.Markdown("### フレーム特徴量")
+                        gr.Plot(value=feature_plot, label="feature")
 
                     with gr.Column():
-                        gr.Markdown("### 可変長特徴データ")
-                        gr.Plot(value=feature_variable_plot, label="feature_variable")
+                        gr.Markdown("### アクセント")
+                        gr.Plot(value=accent_plot, label="accent")
 
                 with gr.Row():
                     with gr.Column():
-                        gr.Markdown("### サンプリングデータ")
+                        gr.Markdown("### モーラ列")
+                        vowel_str = [vowels[i] for i in data_info.vowel]
+                        mora_table = {"": ["子音", "母音"]}
+                        for i, (c, v) in enumerate(
+                            zip(data_info.consonant, vowel_str, strict=True)
+                        ):
+                            mora_table[str(i)] = [c, v]
                         gr.DataFrame(
-                            value=pd.DataFrame(data_info.target_vector.reshape(1, -1)),
-                            label="target_vector",
+                            value=pd.DataFrame(mora_table),
+                            label="mora",
                         )
 
                     with gr.Column():
                         gr.Markdown("### その他の値")
-                        gr.Textbox(
-                            value=f"{data_info.target_scalar:.6f}",
-                            label="回帰ターゲット",
-                            interactive=False,
-                        )
                         gr.Textbox(
                             value=str(data_info.speaker_id),
                             label="話者ID",
@@ -251,7 +266,7 @@ shape: {tuple(output_data.target_scalar.shape)}
             # 状態変更によるUI同期
             def sync_slider_from_state(
                 index: int, dataset_type: DatasetType
-            ) -> tuple[int, Any]:
+            ) -> tuple[int, dict]:
                 dataset = self.dataset_collection.get(dataset_type)
                 max_index = len(dataset) - 1
 

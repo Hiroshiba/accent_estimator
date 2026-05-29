@@ -3,9 +3,8 @@
 from dataclasses import dataclass
 from typing import Self
 
-import torch
 from torch import Tensor, nn
-from torch.nn.functional import cross_entropy, mse_loss
+from torch.nn.functional import cross_entropy
 
 from .batch import BatchOutput
 from .config import ModelConfig
@@ -22,42 +21,44 @@ class ModelOutput(DataNumProtocol):
     loss: Tensor
     """逆伝播させる損失"""
 
-    loss_vector: Tensor
-    loss_variable: Tensor
-    loss_scalar: Tensor
-    accuracy: Tensor
+    precision_accent_start: Tensor
+    precision_accent_end: Tensor
+    precision_accent_phrase_start: Tensor
+    precision_accent_phrase_end: Tensor
+    recall_accent_start: Tensor
+    recall_accent_end: Tensor
+    recall_accent_phrase_start: Tensor
+    recall_accent_phrase_end: Tensor
 
     def detach_cpu(self) -> Self:
         """全てのTensorをdetachしてCPUに移動"""
         self.loss = detach_cpu(self.loss)
-        self.loss_vector = detach_cpu(self.loss_vector)
-        self.loss_variable = detach_cpu(self.loss_variable)
-        self.loss_scalar = detach_cpu(self.loss_scalar)
-        self.accuracy = detach_cpu(self.accuracy)
+        self.precision_accent_start = detach_cpu(self.precision_accent_start)
+        self.precision_accent_end = detach_cpu(self.precision_accent_end)
+        self.precision_accent_phrase_start = detach_cpu(
+            self.precision_accent_phrase_start
+        )
+        self.precision_accent_phrase_end = detach_cpu(self.precision_accent_phrase_end)
+        self.recall_accent_start = detach_cpu(self.recall_accent_start)
+        self.recall_accent_end = detach_cpu(self.recall_accent_end)
+        self.recall_accent_phrase_start = detach_cpu(self.recall_accent_phrase_start)
+        self.recall_accent_phrase_end = detach_cpu(self.recall_accent_phrase_end)
         return self
 
 
-def accuracy(
-    output: Tensor,  # (B, ?)
-    target: Tensor,  # (B,)
-) -> Tensor:
-    """分類精度を計算"""
-    with torch.no_grad():
-        indexes = torch.argmax(output, dim=1)  # (B,)
-        correct = torch.eq(indexes, target).view(-1)  # (B,)
-        return correct.float().mean()
-
-
-def masked_mse_loss(
-    output: Tensor,  # (B, L, ?)
-    target: Tensor,  # (B, L, ?)
-    mask: Tensor,  # (B, L)
-) -> Tensor:
-    """マスク対応のMSE損失を計算"""
-    diff_squared = (output - target) ** 2  # (B, L, ?)
-    mask_expanded = mask.unsqueeze(-1)  # (B, L, 1)
-    masked_loss = diff_squared * mask_expanded  # (B, L, ?)
-    return masked_loss.sum() / (mask.sum() * output.size(-1))
+def _precision_recall(
+    output: Tensor,  # (N, 2)
+    target: Tensor,  # (N,)
+) -> tuple[Tensor, Tensor]:
+    """2 クラス分類の precision と recall を計算"""
+    pred_pos = output[:, 1] > output[:, 0]
+    target_pos = target == 1
+    tp = (pred_pos & target_pos).sum()
+    fp = (pred_pos & ~target_pos).sum()
+    fn = (~pred_pos & target_pos).sum()
+    precision = tp.float() / (tp + fp).clamp(min=1).float()
+    recall = tp.float() / (tp + fn).clamp(min=1).float()
+    return precision, recall
 
 
 class Model(nn.Module):
@@ -70,34 +71,47 @@ class Model(nn.Module):
 
     def forward(self, batch: BatchOutput) -> ModelOutput:
         """データをネットワークに入力して損失などを計算する"""
-        (
-            vector_output,  # (B, ?)
-            variable_output,  # (B, L, ?)
-            scalar_output,  # (B,)
-        ) = self.predictor(
-            feature_vector=batch.feature_vector,
-            feature_variable=batch.feature_variable,
+        output = self.predictor(
+            vowel=batch.vowel,
+            feature=batch.feature,
+            mora_index=batch.mora_index,
             speaker_id=batch.speaker_id,
-            length=batch.length,
+            mora_length=batch.mora_length,
+            frame_length=batch.frame_length,
+        )  # (B, max(mL), 2, 4)
+
+        max_mora_length = output.size(1)
+        mora_mask = make_non_pad_mask(batch.mora_length).to(
+            output.device
+        )  # (B, max(mL))
+
+        flat_output = output[mora_mask]  # (sum(mL), 2, 4)
+        flat_target = batch.accent[:, :max_mora_length][mora_mask]  # (sum(mL), 4)
+
+        loss = cross_entropy(flat_output, flat_target)
+
+        precision_accent_start, recall_accent_start = _precision_recall(
+            flat_output[:, :, 0], flat_target[:, 0]
+        )
+        precision_accent_end, recall_accent_end = _precision_recall(
+            flat_output[:, :, 1], flat_target[:, 1]
+        )
+        precision_accent_phrase_start, recall_accent_phrase_start = _precision_recall(
+            flat_output[:, :, 2], flat_target[:, 2]
+        )
+        precision_accent_phrase_end, recall_accent_phrase_end = _precision_recall(
+            flat_output[:, :, 3], flat_target[:, 3]
         )
 
-        target_vector = batch.target_vector  # (B,)
-        target_variable = batch.target_variable  # (B, L, ?)
-        target_scalar = batch.target_scalar  # (B,)
-
-        mask = make_non_pad_mask(batch.length)  # (B, L)
-
-        loss_vector = cross_entropy(vector_output, target_vector)
-        loss_variable = masked_mse_loss(variable_output, target_variable, mask)
-        loss_scalar = mse_loss(scalar_output, target_scalar)
-        total_loss = loss_vector + loss_variable + loss_scalar
-        acc = accuracy(vector_output, target_vector)
-
         return ModelOutput(
-            loss=total_loss,
-            loss_vector=loss_vector,
-            loss_variable=loss_variable,
-            loss_scalar=loss_scalar,
-            accuracy=acc,
+            loss=loss,
+            precision_accent_start=precision_accent_start,
+            precision_accent_end=precision_accent_end,
+            precision_accent_phrase_start=precision_accent_phrase_start,
+            precision_accent_phrase_end=precision_accent_phrase_end,
+            recall_accent_start=recall_accent_start,
+            recall_accent_end=recall_accent_end,
+            recall_accent_phrase_start=recall_accent_phrase_start,
+            recall_accent_phrase_end=recall_accent_phrase_end,
             data_num=batch.data_num,
         )

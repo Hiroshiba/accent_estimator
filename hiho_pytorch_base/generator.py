@@ -17,10 +17,8 @@ TensorLike = Tensor | numpy.ndarray
 class GeneratorOutput:
     """生成したデータ"""
 
-    vector_output: Tensor  # (B, ?)
-    variable_output: Tensor  # (B, L, ?)
-    scalar_output: Tensor  # (B,)
-    length: Tensor  # (B,)
+    accent_logit: Tensor  # (B, max(mL), 2, 4)
+    mora_length: Tensor  # (B,)
 
 
 def to_tensor(array: TensorLike, device: torch.device) -> Tensor:
@@ -60,26 +58,24 @@ class Generator(nn.Module):
     def forward(
         self,
         *,
-        feature_vector: TensorLike,  # (B, ?)
-        feature_variable: TensorLike,  # (B, L, ?)
+        vowel: TensorLike,  # (B, max(mL))
+        feature: TensorLike,  # (B, max(fL), ?)
+        mora_index: TensorLike,  # (B, max(fL))
         speaker_id: TensorLike,  # (B,)
-        length: TensorLike,  # (B,)
+        mora_length: TensorLike,  # (B,)
+        frame_length: TensorLike,  # (B,)
     ) -> GeneratorOutput:
         """生成経路で推論する"""
-        (
-            vector_output,  # (B, ?)
-            variable_output,  # (B, L, ?)
-            scalar_output,  # (B,)
-        ) = self.predictor(
-            feature_vector=to_tensor(feature_vector, self.device),
-            feature_variable=to_tensor(feature_variable, self.device),
+        mora_length_tensor = to_tensor(mora_length, self.device)
+        accent_logit = self.predictor(  # (B, max(mL), 2, 4)
+            vowel=to_tensor(vowel, self.device),
+            feature=to_tensor(feature, self.device),
+            mora_index=to_tensor(mora_index, self.device),
             speaker_id=to_tensor(speaker_id, self.device),
-            length=to_tensor(length, self.device),
+            mora_length=mora_length_tensor,
+            frame_length=to_tensor(frame_length, self.device),
         )
-
         return GeneratorOutput(
-            vector_output=vector_output,
-            variable_output=variable_output,
-            scalar_output=scalar_output,
-            length=to_tensor(length, self.device),
+            accent_logit=accent_logit,
+            mora_length=mora_length_tensor,
         )
