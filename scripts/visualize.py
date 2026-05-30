@@ -68,14 +68,11 @@ class VisualizationApp:
     ):
         self.config_path = config_path
         self.initial_dataset_type = initial_dataset_type
+        self.initial_predictor_path = predictor_path
 
         self.config = Config.load(config_path)
         self.dataset_collection = self._create_dataset()
-        self.generator = (
-            self._create_generator(predictor_path)
-            if predictor_path is not None
-            else None
-        )
+        self._generator_cache: tuple[str, Generator] | None = None
         self.figure_state = FigureState()
 
     def _create_dataset(self) -> DatasetCollection:
@@ -89,6 +86,16 @@ class VisualizationApp:
             predictor=to_local_path(predictor_path),
             use_gpu=False,
         )
+
+    def _get_generator(self, predictor_path: UPath) -> Generator:
+        """predictorパスからGeneratorを取得し、同じパスならキャッシュを再利用する"""
+        cache_key = str(predictor_path)
+        cache = self._generator_cache
+        if cache is not None and cache[0] == cache_key:
+            return cache[1]
+        generator = self._create_generator(predictor_path)
+        self._generator_cache = (cache_key, generator)
+        return generator
 
     def _run_inference(
         self, generator: Generator, output_data: OutputData
@@ -274,11 +281,17 @@ shape: {tuple(output_data.target_scalar.shape)}
         """Gradio UIを起動"""
         initial_dataset = self.dataset_collection.get(self.initial_dataset_type)
         initial_max_index = len(initial_dataset) - 1
+        initial_predictor_path_str = (
+            str(self.initial_predictor_path)
+            if self.initial_predictor_path is not None
+            else ""
+        )
 
         with gr.Blocks() as demo:
             # 状態管理
             current_index = gr.State(0)
             current_dataset_type = gr.State(self.initial_dataset_type)
+            current_predictor_path = gr.State(initial_predictor_path_str)
 
             # UI コンポーネント
             with gr.Row():
@@ -297,8 +310,20 @@ shape: {tuple(output_data.target_scalar.shape)}
                     scale=3,
                 )
 
-            @gr.render(inputs=[current_index, current_dataset_type])
-            def render_content(index: int, dataset_type: DatasetType) -> None:
+            with gr.Row():
+                predictor_path_textbox = gr.Textbox(
+                    value=initial_predictor_path_str,
+                    label="モデルファイルパス",
+                    placeholder="/path/to/predictor.pth",
+                    info="推論に使うpredictorのパス。空なら推論しない。Enterで適用",
+                )
+
+            @gr.render(
+                inputs=[current_index, current_dataset_type, current_predictor_path]
+            )
+            def render_content(
+                index: int, dataset_type: DatasetType, predictor_path_str: str
+            ) -> None:
                 output_data = self._get_output_data(index, dataset_type)
                 lazy_data = self._get_lazy_data(index, dataset_type)
 
@@ -348,8 +373,12 @@ shape: {tuple(output_data.target_scalar.shape)}
                         gr.Markdown("### 可変長ターゲット")
                         gr.Plot(value=target_variable_plot, label="target_variable")
 
-                generator = self.generator
-                if generator is not None:
+                predictor_path = _to_predictor_path(predictor_path_str)
+                if predictor_path is not None and not predictor_path.exists():
+                    gr.Markdown("## 推論結果")
+                    gr.Markdown(f"モデルファイルが見つかりません: {predictor_path}")
+                elif predictor_path is not None:
+                    generator = self._get_generator(predictor_path)
                     generator_output = self._run_inference(generator, output_data)
                     vector_output = generator_output.vector_output[0].cpu().numpy()
                     variable_output = generator_output.variable_output[0].cpu().numpy()
@@ -437,6 +466,12 @@ shape: {tuple(output_data.target_scalar.shape)}
                 outputs=[current_index, current_dataset_type],
             )
 
+            predictor_path_textbox.submit(
+                lambda new_path: new_path,
+                inputs=[predictor_path_textbox],
+                outputs=[current_predictor_path],
+            )
+
             # 初期化
             demo.load(
                 lambda: (0, self.initial_dataset_type),
@@ -444,6 +479,14 @@ shape: {tuple(output_data.target_scalar.shape)}
             )
 
         demo.launch()
+
+
+def _to_predictor_path(predictor_path_str: str) -> UPath | None:
+    """テキスト入力をpredictorパスへ変換し、空なら指定なしとしてNoneを返す"""
+    stripped = predictor_path_str.strip()
+    if len(stripped) == 0:
+        return None
+    return UPath(stripped)
 
 
 def visualize(
