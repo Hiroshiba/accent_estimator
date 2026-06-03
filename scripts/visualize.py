@@ -8,15 +8,18 @@
 
 import argparse
 from dataclasses import dataclass
+from typing import Any
 
 import gradio as gr
 import japanize_matplotlib  # noqa: F401 日本語フォントに必須
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch
 from matplotlib.figure import Figure
 from upath import UPath
 
+from hiho_pytorch_base.batch import collate_dataset_output
 from hiho_pytorch_base.config import Config
 from hiho_pytorch_base.data.data import OutputData, mora_phoneme_list, vowels
 from hiho_pytorch_base.dataset import (
@@ -25,6 +28,8 @@ from hiho_pytorch_base.dataset import (
     LazyInputData,
     create_dataset,
 )
+from hiho_pytorch_base.generator import Generator, GeneratorOutput
+from hiho_pytorch_base.utility.upath_utility import to_local_path
 
 accent_channel_names = (
     "アクセント核開始",
@@ -51,22 +56,62 @@ class FigureState:
 
     feature_fig: Figure | None = None
     accent_fig: Figure | None = None
+    accent_pred_fig: Figure | None = None
 
 
 class VisualizationApp:
     """可視化アプリケーション"""
 
-    def __init__(self, config_path: UPath, initial_dataset_type: DatasetType):
+    def __init__(
+        self,
+        config_path: UPath,
+        initial_dataset_type: DatasetType,
+        predictor_path: UPath | None,
+    ):
         self.config_path = config_path
         self.initial_dataset_type = initial_dataset_type
+        self.initial_predictor_path = predictor_path
 
+        self.config = Config.load(config_path)
         self.dataset_collection = self._create_dataset()
+        self._generator_cache: tuple[str, Generator] | None = None
         self.figure_state = FigureState()
 
     def _create_dataset(self) -> DatasetCollection:
         """データセットを作成"""
-        config = Config.load(self.config_path)
-        return create_dataset(config.dataset)
+        return create_dataset(self.config.dataset)
+
+    def _create_generator(self, predictor_path: UPath) -> Generator:
+        """推論用のGeneratorを作成"""
+        return Generator(
+            config=self.config,
+            predictor=to_local_path(predictor_path),
+            use_gpu=False,
+        )
+
+    def _get_generator(self, predictor_path: UPath) -> Generator:
+        """predictorパスからGeneratorを取得し、同じパスならキャッシュを再利用する"""
+        cache_key = str(predictor_path)
+        cache = self._generator_cache
+        if cache is not None and cache[0] == cache_key:
+            return cache[1]
+        generator = self._create_generator(predictor_path)
+        self._generator_cache = (cache_key, generator)
+        return generator
+
+    def _run_inference(
+        self, generator: Generator, output_data: OutputData
+    ) -> GeneratorOutput:
+        """OutputDataから推論結果を生成"""
+        batch = collate_dataset_output([output_data])
+        return generator(
+            vowel=batch.vowel,
+            feature=batch.feature,
+            mora_index=batch.mora_index,
+            speaker_id=batch.speaker_id,
+            mora_length=batch.mora_length,
+            frame_length=batch.frame_length,
+        )
 
     def _get_output_data(self, index: int, dataset_type: DatasetType) -> OutputData:
         """前処理済みのOutputDataを取得"""
@@ -146,6 +191,28 @@ shape: {tuple(output_data.accent.shape)}
         self.figure_state.accent_fig = fig
         return fig
 
+    def _setup_accent_pred_plot(self, data: np.ndarray) -> Figure:
+        if self.figure_state.accent_pred_fig is not None:
+            plt.close(self.figure_state.accent_pred_fig)
+
+        fig, ax = plt.subplots(figsize=(10, 4))
+        im = ax.imshow(
+            data.T,
+            aspect="auto",
+            origin="lower",
+            interpolation="nearest",
+            vmin=0,
+            vmax=1,
+        )
+        ax.set_title("予測アクセント確率")
+        ax.set_xlabel("Mora")
+        ax.set_yticks(range(len(accent_channel_names)))
+        ax.set_yticklabels(accent_channel_names)
+        fig.colorbar(im, ax=ax)
+
+        self.figure_state.accent_pred_fig = fig
+        return fig
+
     def _setup_plots(self, output_data: OutputData) -> tuple[Figure, Figure]:
         """プロットを作成または更新"""
         feature_data = output_data.feature.cpu().numpy()
@@ -192,11 +259,17 @@ shape: {tuple(output_data.accent.shape)}
         """Gradio UIを起動"""
         initial_dataset = self.dataset_collection.get(self.initial_dataset_type)
         initial_max_index = len(initial_dataset) - 1
+        initial_predictor_path_str = (
+            str(self.initial_predictor_path)
+            if self.initial_predictor_path is not None
+            else ""
+        )
 
         with gr.Blocks() as demo:
             # 状態管理
             current_index = gr.State(0)
             current_dataset_type = gr.State(self.initial_dataset_type)
+            current_predictor_path = gr.State(initial_predictor_path_str)
 
             # UI コンポーネント
             with gr.Row():
@@ -215,8 +288,20 @@ shape: {tuple(output_data.accent.shape)}
                     scale=3,
                 )
 
-            @gr.render(inputs=[current_index, current_dataset_type])
-            def render_content(index: int, dataset_type: DatasetType) -> None:
+            with gr.Row():
+                predictor_path_textbox = gr.Textbox(
+                    value=initial_predictor_path_str,
+                    label="モデルファイルパス",
+                    placeholder="/path/to/predictor.pth",
+                    info="推論に使うpredictorのパス。空なら推論しない。Enterで適用",
+                )
+
+            @gr.render(
+                inputs=[current_index, current_dataset_type, current_predictor_path]
+            )
+            def render_content(
+                index: int, dataset_type: DatasetType, predictor_path_str: str
+            ) -> None:
                 output_data = self._get_output_data(index, dataset_type)
                 lazy_data = self._get_lazy_data(index, dataset_type)
 
@@ -254,6 +339,29 @@ shape: {tuple(output_data.accent.shape)}
                             interactive=False,
                         )
 
+                predictor_path = _to_predictor_path(predictor_path_str)
+                if predictor_path is not None and not predictor_path.exists():
+                    gr.Markdown("## 推論結果")
+                    gr.Markdown(f"モデルファイルが見つかりません: {predictor_path}")
+                elif predictor_path is not None:
+                    generator = self._get_generator(predictor_path)
+                    generator_output = self._run_inference(generator, output_data)
+
+                    accent_logit = generator_output.accent_logit[0]  # (max(mL), 2, 4)
+                    mora_length = int(generator_output.mora_length[0].item())
+                    accent_prob = (
+                        torch.softmax(accent_logit[:mora_length], dim=1)[:, 1, :]
+                        .cpu()
+                        .numpy()
+                    )  # (mL, 4)
+                    accent_pred_plot = self._setup_accent_pred_plot(accent_prob)
+
+                    gr.Markdown("## 推論結果")
+                    with gr.Row():
+                        with gr.Column():
+                            gr.Markdown("### 予測アクセント確率")
+                            gr.Plot(value=accent_pred_plot, label="accent_pred")
+
                 gr.Markdown("---")
                 gr.Textbox(
                     value=data_info.details,
@@ -266,7 +374,7 @@ shape: {tuple(output_data.accent.shape)}
             # 状態変更によるUI同期
             def sync_slider_from_state(
                 index: int, dataset_type: DatasetType
-            ) -> tuple[int, dict]:
+            ) -> tuple[int, Any]:
                 dataset = self.dataset_collection.get(dataset_type)
                 max_index = len(dataset) - 1
 
@@ -300,6 +408,12 @@ shape: {tuple(output_data.accent.shape)}
                 outputs=[current_index, current_dataset_type],
             )
 
+            predictor_path_textbox.submit(
+                lambda new_path: new_path,
+                inputs=[predictor_path_textbox],
+                outputs=[current_predictor_path],
+            )
+
             # 初期化
             demo.load(
                 lambda: (0, self.initial_dataset_type),
@@ -309,9 +423,19 @@ shape: {tuple(output_data.accent.shape)}
         demo.launch()
 
 
-def visualize(config_path: UPath, dataset_type: DatasetType) -> None:
+def _to_predictor_path(predictor_path_str: str) -> UPath | None:
+    """テキスト入力をpredictorパスへ変換し、空なら指定なしとしてNoneを返す"""
+    stripped = predictor_path_str.strip()
+    if len(stripped) == 0:
+        return None
+    return UPath(stripped)
+
+
+def visualize(
+    config_path: UPath, dataset_type: DatasetType, predictor_path: UPath | None
+) -> None:
     """指定されたデータセットをGradio UIで可視化する"""
-    app = VisualizationApp(config_path, dataset_type)
+    app = VisualizationApp(config_path, dataset_type, predictor_path)
     app.launch()
 
 
@@ -321,6 +445,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset_type", type=DatasetType, required=True, help="データセットタイプ"
     )
+    parser.add_argument(
+        "--predictor_path",
+        type=UPath,
+        help="推論結果を可視化する場合のpredictorモデルパス",
+    )
 
     args = parser.parse_args()
-    visualize(config_path=args.config_path, dataset_type=args.dataset_type)
+    visualize(
+        config_path=args.config_path,
+        dataset_type=args.dataset_type,
+        predictor_path=args.predictor_path,
+    )
