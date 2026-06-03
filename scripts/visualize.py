@@ -64,39 +64,50 @@ class VisualizationApp:
 
     def __init__(
         self,
-        config_path: UPath,
+        initial_config_path: UPath | None,
         initial_dataset_type: DatasetType,
-        predictor_path: UPath | None,
+        initial_predictor_path: UPath | None,
     ):
-        self.config_path = config_path
+        self.initial_config_path = initial_config_path
         self.initial_dataset_type = initial_dataset_type
-        self.initial_predictor_path = predictor_path
-
-        self.config = Config.load(config_path)
-        self.dataset_collection = self._create_dataset()
-        self._generator_cache: tuple[str, Generator] | None = None
+        self.initial_predictor_path = initial_predictor_path
+        self._config_dataset_cache: tuple[str, Config, DatasetCollection] | None = None
+        self._generator_cache: tuple[str, str, Generator] | None = None
         self.figure_state = FigureState()
 
-    def _create_dataset(self) -> DatasetCollection:
-        """データセットを作成"""
-        return create_dataset(self.config.dataset)
+    def _get_config_and_dataset(
+        self, config_path: UPath
+    ) -> tuple[Config, DatasetCollection]:
+        """configパスからConfigとDatasetCollectionを取得し、同じパスならキャッシュを再利用する"""
+        cache_key = str(config_path)
+        cache = self._config_dataset_cache
+        if cache is not None and cache[0] == cache_key:
+            return cache[1], cache[2]
+        config = Config.load(config_path)
+        dataset_collection = create_dataset(config.dataset)
+        self._config_dataset_cache = (cache_key, config, dataset_collection)
+        return config, dataset_collection
 
-    def _create_generator(self, predictor_path: UPath) -> Generator:
+    def _create_generator(self, config: Config, predictor_path: UPath) -> Generator:
         """推論用のGeneratorを作成"""
         return Generator(
-            config=self.config,
+            config=config,
             predictor=to_local_path(predictor_path),
             use_gpu=False,
         )
 
-    def _get_generator(self, predictor_path: UPath) -> Generator:
-        """predictorパスからGeneratorを取得し、同じパスならキャッシュを再利用する"""
-        cache_key = str(predictor_path)
+    def _get_generator(
+        self, config_path: UPath, predictor_path: UPath
+    ) -> Generator:
+        """configパスとpredictorパスからGeneratorを取得し、同じパスならキャッシュを再利用する"""
+        config_key = str(config_path)
+        predictor_key = str(predictor_path)
         cache = self._generator_cache
-        if cache is not None and cache[0] == cache_key:
-            return cache[1]
-        generator = self._create_generator(predictor_path)
-        self._generator_cache = (cache_key, generator)
+        if cache is not None and cache[0] == config_key and cache[1] == predictor_key:
+            return cache[2]
+        config, _ = self._get_config_and_dataset(config_path)
+        generator = self._create_generator(config, predictor_path)
+        self._generator_cache = (config_key, predictor_key, generator)
         return generator
 
     def _run_inference(
@@ -113,22 +124,35 @@ class VisualizationApp:
             frame_length=batch.frame_length,
         )
 
-    def _get_output_data(self, index: int, dataset_type: DatasetType) -> OutputData:
+    def _get_output_data(
+        self,
+        dataset_collection: DatasetCollection,
+        index: int,
+        dataset_type: DatasetType,
+    ) -> OutputData:
         """前処理済みのOutputDataを取得"""
-        dataset = self.dataset_collection.get(dataset_type)
+        dataset = dataset_collection.get(dataset_type)
         return dataset[index]
 
-    def _get_lazy_data(self, index: int, dataset_type: DatasetType) -> LazyInputData:
+    def _get_lazy_data(
+        self,
+        dataset_collection: DatasetCollection,
+        index: int,
+        dataset_type: DatasetType,
+    ) -> LazyInputData:
         """遅延読み込み用のLazyInputDataを取得"""
-        dataset = self.dataset_collection.get(dataset_type)
+        dataset = dataset_collection.get(dataset_type)
         return dataset.datas[index]
 
     def _create_details_text(
-        self, output_data: OutputData, lazy_data: LazyInputData
+        self,
+        config_path: UPath,
+        output_data: OutputData,
+        lazy_data: LazyInputData,
     ) -> str:
         """詳細情報テキストを作成"""
         return f"""
-設定ファイル: {self.config_path}
+設定ファイル: {config_path}
 
 フレーム特徴量
 パス: {lazy_data.feature_path}
@@ -238,14 +262,17 @@ shape: {tuple(output_data.accent.shape)}
         return consonant
 
     def _create_data_info(
-        self, output_data: OutputData, lazy_data: LazyInputData
+        self,
+        config_path: UPath,
+        output_data: OutputData,
+        lazy_data: LazyInputData,
     ) -> DataInfo:
         """データ情報を作成"""
         consonant = self._extract_consonant(lazy_data)
         vowel = output_data.vowel.cpu().numpy()
         accent = output_data.accent.cpu().numpy()
         speaker_id = int(output_data.speaker_id.item())
-        details = self._create_details_text(output_data, lazy_data)
+        details = self._create_details_text(config_path, output_data, lazy_data)
 
         return DataInfo(
             consonant=consonant,
@@ -257,21 +284,46 @@ shape: {tuple(output_data.accent.shape)}
 
     def launch(self) -> None:
         """Gradio UIを起動"""
-        initial_dataset = self.dataset_collection.get(self.initial_dataset_type)
-        initial_max_index = len(initial_dataset) - 1
+        initial_config_path_str = (
+            str(self.initial_config_path)
+            if self.initial_config_path is not None
+            else ""
+        )
         initial_predictor_path_str = (
             str(self.initial_predictor_path)
             if self.initial_predictor_path is not None
             else ""
         )
 
+        if self.initial_config_path is not None:
+            _, initial_dataset_collection = self._get_config_and_dataset(
+                self.initial_config_path
+            )
+            initial_dataset = initial_dataset_collection.get(self.initial_dataset_type)
+            initial_max_index = len(initial_dataset) - 1
+        else:
+            initial_max_index = 0
+
         with gr.Blocks() as demo:
             # 状態管理
             current_index = gr.State(0)
             current_dataset_type = gr.State(self.initial_dataset_type)
             current_predictor_path = gr.State(initial_predictor_path_str)
+            current_config_path = gr.State(initial_config_path_str)
 
             # UI コンポーネント
+            with gr.Row():
+                config_path_textbox = gr.Textbox(
+                    value=initial_config_path_str,
+                    label="設定ファイルパス",
+                    placeholder="/path/to/config.yaml",
+                )
+                predictor_path_textbox = gr.Textbox(
+                    value=initial_predictor_path_str,
+                    label="モデルファイルパス",
+                    placeholder="/path/to/predictor.pth",
+                )
+
             with gr.Row():
                 dataset_type_dropdown = gr.Dropdown(
                     choices=list(DatasetType),
@@ -288,25 +340,36 @@ shape: {tuple(output_data.accent.shape)}
                     scale=3,
                 )
 
-            with gr.Row():
-                predictor_path_textbox = gr.Textbox(
-                    value=initial_predictor_path_str,
-                    label="モデルファイルパス",
-                    placeholder="/path/to/predictor.pth",
-                    info="推論に使うpredictorのパス。空なら推論しない。Enterで適用",
-                )
-
             @gr.render(
-                inputs=[current_index, current_dataset_type, current_predictor_path]
+                inputs=[
+                    current_index,
+                    current_dataset_type,
+                    current_predictor_path,
+                    current_config_path,
+                ]
             )
             def render_content(
-                index: int, dataset_type: DatasetType, predictor_path_str: str
+                index: int,
+                dataset_type: DatasetType,
+                predictor_path_str: str,
+                config_path_str: str,
             ) -> None:
-                output_data = self._get_output_data(index, dataset_type)
-                lazy_data = self._get_lazy_data(index, dataset_type)
+                config_path = _to_config_path(config_path_str)
+                if config_path is None:
+                    gr.Markdown("設定ファイルパスを指定してください")
+                    return
+                if not config_path.exists():
+                    gr.Markdown(f"設定ファイルが見つかりません: {config_path}")
+                    return
+
+                _, dataset_collection = self._get_config_and_dataset(config_path)
+                output_data = self._get_output_data(
+                    dataset_collection, index, dataset_type
+                )
+                lazy_data = self._get_lazy_data(dataset_collection, index, dataset_type)
 
                 feature_plot, accent_plot = self._setup_plots(output_data)
-                data_info = self._create_data_info(output_data, lazy_data)
+                data_info = self._create_data_info(config_path, output_data, lazy_data)
 
                 with gr.Row():
                     with gr.Column():
@@ -344,7 +407,7 @@ shape: {tuple(output_data.accent.shape)}
                     gr.Markdown("## 推論結果")
                     gr.Markdown(f"モデルファイルが見つかりません: {predictor_path}")
                 elif predictor_path is not None:
-                    generator = self._get_generator(predictor_path)
+                    generator = self._get_generator(config_path, predictor_path)
                     generator_output = self._run_inference(generator, output_data)
 
                     accent_logit = generator_output.accent_logit[0]  # (max(mL), 2, 4)
@@ -373,26 +436,46 @@ shape: {tuple(output_data.accent.shape)}
 
             # 状態変更によるUI同期
             def sync_slider_from_state(
-                index: int, dataset_type: DatasetType
+                index: int, dataset_type: DatasetType, config_path_str: str
             ) -> tuple[int, Any]:
-                dataset = self.dataset_collection.get(dataset_type)
+                config_path = _to_config_path(config_path_str)
+                if config_path is None or not config_path.exists():
+                    return (index, gr.update(maximum=0))
+                _, dataset_collection = self._get_config_and_dataset(config_path)
+                dataset = dataset_collection.get(dataset_type)
                 max_index = len(dataset) - 1
-
                 return (
-                    index,  # index_slider value
-                    gr.update(maximum=max_index),  # index_slider max
+                    index,
+                    gr.update(maximum=max_index),
                 )
+
+            def on_config_path_change(
+                config_path_str: str, dataset_type: DatasetType
+            ) -> tuple[int, Any]:
+                config_path = _to_config_path(config_path_str)
+                if config_path is None or not config_path.exists():
+                    return (0, gr.update(maximum=0, value=0))
+                _, dataset_collection = self._get_config_and_dataset(config_path)
+                dataset = dataset_collection.get(dataset_type)
+                max_index = len(dataset) - 1
+                return (0, gr.update(maximum=max_index, value=0))
 
             current_index.change(
                 sync_slider_from_state,
-                inputs=[current_index, current_dataset_type],
+                inputs=[current_index, current_dataset_type, current_config_path],
                 outputs=[index_slider, index_slider],
             )
 
             current_dataset_type.change(
                 sync_slider_from_state,
-                inputs=[current_index, current_dataset_type],
+                inputs=[current_index, current_dataset_type, current_config_path],
                 outputs=[index_slider, index_slider],
+            )
+
+            current_config_path.change(
+                on_config_path_change,
+                inputs=[current_config_path, current_dataset_type],
+                outputs=[current_index, index_slider],
             )
 
             # UI操作から状態への更新
@@ -414,13 +497,27 @@ shape: {tuple(output_data.accent.shape)}
                 outputs=[current_predictor_path],
             )
 
+            config_path_textbox.submit(
+                lambda new_path: new_path,
+                inputs=[config_path_textbox],
+                outputs=[current_config_path],
+            )
+
             # 初期化
             demo.load(
-                lambda: (0, self.initial_dataset_type),
-                outputs=[current_index, current_dataset_type],
+                lambda: (0, self.initial_dataset_type, initial_config_path_str),
+                outputs=[current_index, current_dataset_type, current_config_path],
             )
 
         demo.launch()
+
+
+def _to_config_path(config_path_str: str) -> UPath | None:
+    """テキスト入力をconfigパスへ変換し、空なら指定なしとしてNoneを返す"""
+    stripped = config_path_str.strip()
+    if len(stripped) == 0:
+        return None
+    return UPath(stripped)
 
 
 def _to_predictor_path(predictor_path_str: str) -> UPath | None:
@@ -432,7 +529,9 @@ def _to_predictor_path(predictor_path_str: str) -> UPath | None:
 
 
 def visualize(
-    config_path: UPath, dataset_type: DatasetType, predictor_path: UPath | None
+    config_path: UPath | None,
+    dataset_type: DatasetType,
+    predictor_path: UPath | None,
 ) -> None:
     """指定されたデータセットをGradio UIで可視化する"""
     app = VisualizationApp(config_path, dataset_type, predictor_path)
@@ -441,9 +540,16 @@ def visualize(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="データセットのビジュアライゼーション")
-    parser.add_argument("config_path", type=UPath, help="設定ファイルのパス")
     parser.add_argument(
-        "--dataset_type", type=DatasetType, required=True, help="データセットタイプ"
+        "--config_path",
+        type=UPath,
+        help="設定ファイルのパス",
+    )
+    parser.add_argument(
+        "--dataset_type",
+        type=DatasetType,
+        default=DatasetType.TRAIN,
+        help="データセットタイプ",
     )
     parser.add_argument(
         "--predictor_path",
