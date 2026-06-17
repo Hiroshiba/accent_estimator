@@ -41,6 +41,16 @@ class Wave:
             )
             return Wave(wave=wave, sampling_rate=int(loaded_sr))
 
+    def resample(self, sampling_rate: int):
+        """リサンプリングした Wave を返す"""
+        wave = librosa.resample(
+            self.wave,
+            orig_sr=self.sampling_rate,
+            target_sr=sampling_rate,
+            res_type="soxr_vhq",
+        )
+        return Wave(wave=wave, sampling_rate=sampling_rate)
+
     def save(self, path: Path):
         """音声ファイルを保存する"""
         soundfile.write(str(path), data=self.wave, samplerate=self.sampling_rate)
