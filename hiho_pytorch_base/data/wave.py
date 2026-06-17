@@ -41,15 +41,14 @@ class Wave:
             )
             return Wave(wave=wave, sampling_rate=int(loaded_sr))
 
-    def resample(self, sampling_rate: int):
-        """リサンプリングした Wave を返す"""
-        wave = librosa.resample(
+    def resample(self, sampling_rate: int) -> numpy.ndarray:
+        """リサンプリングしたデータを返す"""
+        return librosa.resample(
             self.wave,
             orig_sr=self.sampling_rate,
             target_sr=sampling_rate,
             res_type="soxr_vhq",
         )
-        return Wave(wave=wave, sampling_rate=sampling_rate)
 
     def save(self, path: Path):
         """音声ファイルを保存する"""
