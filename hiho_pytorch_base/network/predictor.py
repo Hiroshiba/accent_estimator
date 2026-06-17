@@ -7,6 +7,7 @@ from torch.nn import functional as F
 from ..config import NetworkConfig
 from ..data.data import vowels
 from .conformer.encoder import Encoder
+from .ssl_feature_models import HubertModel, load_ssl_model
 from .transformer.utility import make_non_pad_mask
 
 
@@ -15,16 +16,19 @@ class Predictor(nn.Module):
 
     def __init__(
         self,
+        ssl_model: HubertModel,
         vowel_size: int,
         vowel_embedding_size: int,
         speaker_size: int,
         speaker_embedding_size: int,
         frame_reduction_factor: int,
-        feature_size: int,
         hidden_size: int,
         encoder: Encoder,
     ):
         super().__init__()
+
+        self.ssl_model = ssl_model
+        feature_size = ssl_model.config.num_hidden_layers * ssl_model.config.hidden_size
 
         self.vowel_embedder = nn.Embedding(vowel_size, vowel_embedding_size)
         self.speaker_embedder = nn.Embedding(speaker_size, speaker_embedding_size)
@@ -40,12 +44,23 @@ class Predictor(nn.Module):
         self,
         *,
         vowel: Tensor,  # (B, max(mL))
-        feature: Tensor,  # (B, max(fL), ?)
+        wave: Tensor,  # (B, max(wL))
         mora_index: Tensor,  # (B, max(fL))
         speaker_id: Tensor,  # (B,)
+        wave_length: Tensor,  # (B,)
         mora_length: Tensor,  # (B,)
-        frame_length: Tensor,  # (B,)
     ) -> Tensor:  # (B, max(mL), 2, 4)
+        attention_mask = _make_wave_attention_mask(wave, wave_length)  # (B, max(wL))
+        hidden_layers = self.ssl_model.extract_hidden_layers(wave, attention_mask)
+        feature = torch.stack(list(hidden_layers), dim=-1)  # (B, max(fL), ?, 12)
+        feature = feature.flatten(start_dim=2)  # (B, max(fL), ?)
+        frame_length = _compute_ssl_frame_lengths(wave_length)  # (B,)
+
+        fL = min(int(feature.size(1)), int(mora_index.size(1)))
+        feature = feature[:, :fL, :]
+        mora_index = mora_index[:, :fL]
+        frame_length = torch.clamp(frame_length, max=fL)
+
         if self.frame_reduction_factor > 1:
             reduced_feature = F.avg_pool1d(
                 feature.transpose(1, 2),
@@ -119,8 +134,31 @@ class Predictor(nn.Module):
         return x[:, :max_mora_length]
 
 
+def _make_wave_attention_mask(wave: Tensor, wave_length: Tensor) -> Tensor:
+    """音声波形の有効長からattention maskを作成する。"""
+    _, max_length = wave.shape
+    indices = torch.arange(max_length, device=wave.device).unsqueeze(0)  # (1, max(wL))
+    return (indices < wave_length.unsqueeze(1)).long()  # (B, max(wL))
+
+
+def _compute_ssl_frame_lengths(wave_length: Tensor) -> Tensor:
+    """音声長からSSL特徴量のフレーム数を計算する。"""
+    from .ssl_feature_models import create_base_hubert_config
+
+    config = create_base_hubert_config()
+    lengths = wave_length.clone()
+    for kernel, stride in zip(config.conv_kernel, config.conv_stride, strict=True):
+        lengths = (lengths - kernel) // stride + 1
+    return lengths
+
+
 def create_predictor(config: NetworkConfig) -> Predictor:
     """設定からPredictorを作成"""
+    ssl_model = load_ssl_model(
+        model_type=config.ssl_model_type,
+        model_path=config.ssl_model_path,
+        device=torch.device("cpu"),
+    )
     encoder = Encoder(
         hidden_size=config.hidden_size,
         condition_size=0,
@@ -136,12 +174,12 @@ def create_predictor(config: NetworkConfig) -> Predictor:
         feed_forward_kernel_size=3,
     )
     return Predictor(
+        ssl_model=ssl_model,
         vowel_size=len(vowels),
         vowel_embedding_size=config.vowel_embedding_size,
         speaker_size=config.speaker_size,
         speaker_embedding_size=config.speaker_embedding_size,
         frame_reduction_factor=config.frame_reduction_factor,
-        feature_size=config.feature_size,
         hidden_size=config.hidden_size,
         encoder=encoder,
     )

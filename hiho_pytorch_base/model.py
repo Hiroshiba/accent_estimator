@@ -73,11 +73,11 @@ class Model(nn.Module):
         """データをネットワークに入力して損失などを計算する"""
         output = self.predictor(
             vowel=batch.vowel,
-            feature=batch.feature,
+            wave=batch.wave,
             mora_index=batch.mora_index,
             speaker_id=batch.speaker_id,
+            wave_length=batch.wave_length,
             mora_length=batch.mora_length,
-            frame_length=batch.frame_length,
         )  # (B, max(mL), 2, 4)
 
         max_mora_length = output.size(1)

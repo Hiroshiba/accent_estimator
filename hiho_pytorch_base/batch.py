@@ -16,12 +16,12 @@ class BatchOutput:
     """バッチ処理後のデータ構造"""
 
     vowel: Tensor  # (B, max(mL))
-    feature: Tensor  # (B, max(fL), ?)
+    wave: Tensor  # (B, max(wL))
     mora_index: Tensor  # (B, max(fL))
     accent: Tensor  # (B, max(mL), ?)
     speaker_id: Tensor  # (B,)
+    wave_length: Tensor  # (B,)
     mora_length: Tensor  # (B,)
-    frame_length: Tensor  # (B,)
 
     @property
     def data_num(self) -> int:
@@ -31,15 +31,15 @@ class BatchOutput:
     def to_device(self, device: str, non_blocking: bool) -> Self:
         """データを指定されたデバイスに移動"""
         self.vowel = to_device(self.vowel, device, non_blocking=non_blocking)
-        self.feature = to_device(self.feature, device, non_blocking=non_blocking)
+        self.wave = to_device(self.wave, device, non_blocking=non_blocking)
         self.mora_index = to_device(self.mora_index, device, non_blocking=non_blocking)
         self.accent = to_device(self.accent, device, non_blocking=non_blocking)
         self.speaker_id = to_device(self.speaker_id, device, non_blocking=non_blocking)
+        self.wave_length = to_device(
+            self.wave_length, device, non_blocking=non_blocking
+        )
         self.mora_length = to_device(
             self.mora_length, device, non_blocking=non_blocking
-        )
-        self.frame_length = to_device(
-            self.frame_length, device, non_blocking=non_blocking
         )
         return self
 
@@ -56,10 +56,10 @@ def collate_dataset_output(data_list: list[OutputData]) -> BatchOutput:
 
     return BatchOutput(
         vowel=pad_sequence([d.vowel for d in data_list], batch_first=True),
-        feature=pad_sequence([d.feature for d in data_list], batch_first=True),
+        wave=pad_sequence([d.wave for d in data_list], batch_first=True),
         mora_index=pad_sequence([d.mora_index for d in data_list], batch_first=True),
         accent=pad_sequence([d.accent for d in data_list], batch_first=True),
         speaker_id=collate_stack([d.speaker_id for d in data_list]),
+        wave_length=torch.tensor([d.wave.shape[0] for d in data_list]),
         mora_length=torch.tensor([d.vowel.shape[0] for d in data_list]),
-        frame_length=torch.tensor([d.feature.shape[0] for d in data_list]),
     )

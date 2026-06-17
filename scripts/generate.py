@@ -85,11 +85,11 @@ def generate(
         batch.to_device(device="cuda" if use_gpu else "cpu", non_blocking=True)
         _ = generator(
             vowel=batch.vowel,
-            feature=batch.feature,
+            wave=batch.wave,
             mora_index=batch.mora_index,
             speaker_id=batch.speaker_id,
+            wave_length=batch.wave_length,
             mora_length=batch.mora_length,
-            frame_length=batch.frame_length,
         )
 
 

@@ -30,7 +30,7 @@ mora_phoneme_list = (
 class InputData:
     """データ処理前のデータ構造"""
 
-    feature: numpy.ndarray
+    wave: numpy.ndarray
     phoneme_list: list[BasePhoneme]
     accent_start: list[bool]
     accent_end: list[bool]
@@ -44,13 +44,13 @@ class OutputData:
     """データ処理後のデータ構造"""
 
     vowel: Tensor
-    feature: Tensor
+    wave: Tensor
     mora_index: Tensor
     accent: Tensor
     speaker_id: Tensor
 
 
-def preprocess(d: InputData, *, is_eval: bool) -> OutputData:
+def preprocess(d: InputData, *, is_eval: bool, frame_length: int) -> OutputData:
     """データ処理"""
     _ = is_eval
 
@@ -79,12 +79,12 @@ def preprocess(d: InputData, *, is_eval: bool) -> OutputData:
     mora_index = _make_index_array(
         split_second_list=mora_split_second_list,
         rate=frame_rate,
-        length=len(d.feature),
+        length=frame_length,
     )
 
     return OutputData(
         vowel=torch.from_numpy(vowel).long(),
-        feature=torch.from_numpy(d.feature).float(),
+        wave=torch.from_numpy(numpy.asarray(d.wave, dtype=numpy.float32)),
         mora_index=torch.from_numpy(mora_index).long(),
         accent=torch.from_numpy(accent).long(),
         speaker_id=torch.tensor(d.speaker_id).long(),

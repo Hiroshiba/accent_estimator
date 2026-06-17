@@ -61,11 +61,11 @@ class Evaluator(nn.Module):
         """データをネットワークに入力して評価値を計算する"""
         output_result: GeneratorOutput = self.generator(
             vowel=batch.vowel,
-            feature=batch.feature,
+            wave=batch.wave,
             mora_index=batch.mora_index,
             speaker_id=batch.speaker_id,
+            wave_length=batch.wave_length,
             mora_length=batch.mora_length,
-            frame_length=batch.frame_length,
         )
 
         output = output_result.accent_logit  # (B, max(mL), 2, 4)

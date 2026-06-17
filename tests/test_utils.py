@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
+import soundfile
 from upath import UPath
 
 from hiho_pytorch_base.config import Config
@@ -89,19 +90,17 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
         num_mora = int(np.random.default_rng().integers(3, 12))
         phoneme_lists[stem] = _generate_phoneme_sequence(num_mora)
 
-    # フレーム特徴量
-    def generate_feature(file_path: Path) -> None:
+    # 音声波形
+    _SAMPLE_RATE = 16000
+
+    def generate_wave(file_path: Path) -> None:
         phonemes = phoneme_lists[file_path.stem]
         total_seconds = phonemes[-1].end
-        frame_length = int(round(total_seconds * _FRAME_RATE))
-        feature = (
-            np.random.default_rng()
-            .normal(size=(frame_length, config.network.feature_size))
-            .astype(np.float32)
-        )
-        np.save(file_path, feature)
+        num_samples = int(round(total_seconds * _SAMPLE_RATE))
+        wave = np.random.default_rng().normal(size=num_samples).astype(np.float32)
+        soundfile.write(str(file_path), wave, _SAMPLE_RATE)
 
-    _setup_data(generate_feature, "feature", "npy")
+    _setup_data(generate_wave, "wave", "wav")
 
     # 音素ラベル
     def generate_phoneme_list(file_path: Path) -> None:

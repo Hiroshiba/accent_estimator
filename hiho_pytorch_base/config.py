@@ -1,6 +1,6 @@
 """機械学習プロジェクトの設定モジュール"""
 
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,7 +17,7 @@ class _Model(BaseModel):
 class DataFileConfig(_Model):
     """データファイルの設定"""
 
-    feature_pathlist_path: UPathField
+    wave_pathlist_path: UPathField
     phoneme_list_pathlist_path: UPathField
     accent_start_pathlist_path: UPathField
     accent_end_pathlist_path: UPathField
@@ -43,7 +43,8 @@ class DatasetConfig(_Model):
 class NetworkConfig(_Model):
     """ニューラルネットワークの設定"""
 
-    feature_size: int
+    ssl_model_type: Literal["hubert", "contentvec"]
+    ssl_model_path: UPathField
     vowel_embedding_size: int
     frame_reduction_factor: int
     hidden_size: int

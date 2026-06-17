@@ -96,9 +96,7 @@ class VisualizationApp:
             use_gpu=False,
         )
 
-    def _get_generator(
-        self, config_path: UPath, predictor_path: UPath
-    ) -> Generator:
+    def _get_generator(self, config_path: UPath, predictor_path: UPath) -> Generator:
         """configパスとpredictorパスからGeneratorを取得し、同じパスならキャッシュを再利用する"""
         config_key = str(config_path)
         predictor_key = str(predictor_path)
@@ -117,11 +115,11 @@ class VisualizationApp:
         batch = collate_dataset_output([output_data])
         return generator(
             vowel=batch.vowel,
-            feature=batch.feature,
+            wave=batch.wave,
             mora_index=batch.mora_index,
             speaker_id=batch.speaker_id,
+            wave_length=batch.wave_length,
             mora_length=batch.mora_length,
-            frame_length=batch.frame_length,
         )
 
     def _get_output_data(
@@ -154,9 +152,9 @@ class VisualizationApp:
         return f"""
 設定ファイル: {config_path}
 
-フレーム特徴量
-パス: {lazy_data.feature_path}
-shape: {tuple(output_data.feature.shape)}
+音声波形
+パス: {lazy_data.wave_path}
+shape: {tuple(output_data.wave.shape)}
 
 母音列
 パス: {lazy_data.phoneme_list_path}
@@ -239,7 +237,7 @@ shape: {tuple(output_data.accent.shape)}
 
     def _setup_plots(self, output_data: OutputData) -> tuple[Figure, Figure]:
         """プロットを作成または更新"""
-        feature_data = output_data.feature.cpu().numpy()
+        feature_data = output_data.wave.cpu().numpy()
         accent_data = output_data.accent.cpu().numpy()
 
         feature_plot = self._setup_feature_plot(feature_data)

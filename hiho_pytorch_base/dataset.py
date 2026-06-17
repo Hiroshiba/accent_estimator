@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import assert_never
 
 import h5py
+import librosa
 import numpy
+import soundfile
 from pydantic import TypeAdapter
 from torch.utils.data import Dataset as BaseDataset
 from upath import UPath
@@ -19,6 +21,11 @@ from upath import UPath
 from .config import DataFileConfig, DatasetConfig
 from .data.data import InputData, OutputData, preprocess
 from .data.phoneme import OjtPhoneme
+from .network.ssl_feature_models import (
+    MODEL_SAMPLE_RATE,
+    compute_ssl_frame_length,
+    create_base_hubert_config,
+)
 from .utility.pathlist_utility import get_data_paths
 from .utility.upath_utility import to_local_path
 
@@ -32,7 +39,7 @@ def _read_bool_list(path: Path) -> list[bool]:
 class LazyInputData:
     """遅延読み込み対応の入力データ構造"""
 
-    feature_path: UPath
+    wave_path: UPath
     phoneme_list_path: UPath
     accent_start_path: UPath
     accent_end_path: UPath
@@ -44,7 +51,7 @@ class LazyInputData:
     def _generate_hdf5_cache_filename(self) -> str:
         paths_str = "\n".join(
             [
-                str(self.feature_path),
+                str(self.wave_path),
                 str(self.phoneme_list_path),
                 str(self.accent_start_path),
                 str(self.accent_end_path),
@@ -63,7 +70,7 @@ class LazyInputData:
 
     def _get_manifest(self) -> dict[str, str]:
         return {
-            "feature_path": str(self.feature_path),
+            "wave_path": str(self.wave_path),
             "phoneme_list_path": str(self.phoneme_list_path),
             "accent_start_path": str(self.accent_start_path),
             "accent_end_path": str(self.accent_end_path),
@@ -79,7 +86,7 @@ class LazyInputData:
             local_path = Path(tmp.name)
 
         with h5py.File(local_path, "w") as f:
-            f.create_dataset("feature", data=d.feature)
+            f.create_dataset("wave", data=d.wave)
             phoneme_text = "\n".join(
                 f"{p.start:.4f}\t{p.end:.4f}\t{p.phoneme}" for p in d.phoneme_list
             )
@@ -107,7 +114,7 @@ class LazyInputData:
             phoneme_text = phoneme_text.decode()
             phoneme_list = OjtPhoneme.loads_julius_list(phoneme_text)
             return InputData(
-                feature=numpy.array(f["feature"]),
+                wave=numpy.array(f["wave"]),
                 phoneme_list=phoneme_list,
                 accent_start=numpy.array(f["accent_start"]).astype(bool).tolist(),
                 accent_end=numpy.array(f["accent_end"]).astype(bool).tolist(),
@@ -121,8 +128,20 @@ class LazyInputData:
             )
 
     def _fetch_from_files(self) -> InputData:
+        local_wave_path = to_local_path(self.wave_path)
+        wave, sr = soundfile.read(
+            str(local_wave_path), dtype="float32", always_2d=False
+        )
+        if not isinstance(wave, numpy.ndarray):
+            raise ValueError(f"音声ファイルの読み込みに失敗しました: {self.wave_path}")
+        if wave.ndim != 1:
+            raise ValueError(
+                f"音声ファイルはモノラルにしてください: {self.wave_path}: shape={wave.shape}"
+            )
+        if sr != MODEL_SAMPLE_RATE:
+            wave = librosa.resample(wave, orig_sr=sr, target_sr=MODEL_SAMPLE_RATE)
         return InputData(
-            feature=numpy.load(to_local_path(self.feature_path), allow_pickle=True),
+            wave=wave,
             phoneme_list=OjtPhoneme.loads_julius_list(
                 to_local_path(self.phoneme_list_path).read_text()
             ),
@@ -201,7 +220,13 @@ class Dataset(BaseDataset[OutputData]):
     def __getitem__(self, i: int) -> OutputData:
         """指定されたインデックスのデータを前処理して返す"""
         try:
-            return preprocess(self.datas[i].fetch(), is_eval=self.is_eval)
+            input_data = self.datas[i].fetch()
+            frame_length = compute_ssl_frame_length(
+                len(input_data.wave), create_base_hubert_config()
+            )
+            return preprocess(
+                input_data, is_eval=self.is_eval, frame_length=frame_length
+            )
         except Exception as e:
             raise RuntimeError(
                 f"データ処理に失敗しました: index={i} data={self.datas[i]}"
@@ -259,7 +284,7 @@ def get_datas(
     (
         fn_list,
         (
-            feature_pathmappings,
+            wave_pathmappings,
             phoneme_list_pathmappings,
             accent_start_pathmappings,
             accent_end_pathmappings,
@@ -269,7 +294,7 @@ def get_datas(
     ) = get_data_paths(
         config.root_dir,
         [
-            config.feature_pathlist_path,
+            config.wave_pathlist_path,
             config.phoneme_list_pathlist_path,
             config.accent_start_pathlist_path,
             config.accent_end_pathlist_path,
@@ -289,7 +314,7 @@ def get_datas(
 
     datas = [
         LazyInputData(
-            feature_path=feature_pathmappings[fn],
+            wave_path=wave_pathmappings[fn],
             phoneme_list_path=phoneme_list_pathmappings[fn],
             accent_start_path=accent_start_pathmappings[fn],
             accent_end_path=accent_end_pathmappings[fn],
