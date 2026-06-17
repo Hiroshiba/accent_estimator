@@ -11,9 +11,7 @@ from pathlib import Path
 from typing import assert_never
 
 import h5py
-import librosa
 import numpy
-import soundfile
 from pydantic import TypeAdapter
 from torch.utils.data import Dataset as BaseDataset
 from upath import UPath
@@ -21,6 +19,7 @@ from upath import UPath
 from .config import DataFileConfig, DatasetConfig
 from .data.data import InputData, OutputData, preprocess
 from .data.phoneme import OjtPhoneme
+from .data.wave import Wave
 from .network.ssl_feature_models import (
     MODEL_SAMPLE_RATE,
     compute_ssl_frame_length,
@@ -128,18 +127,10 @@ class LazyInputData:
             )
 
     def _fetch_from_files(self) -> InputData:
-        local_wave_path = to_local_path(self.wave_path)
-        wave, sr = soundfile.read(
-            str(local_wave_path), dtype="float32", always_2d=False
-        )
-        if not isinstance(wave, numpy.ndarray):
-            raise ValueError(f"音声ファイルの読み込みに失敗しました: {self.wave_path}")
+        loaded = Wave.load(to_local_path(self.wave_path), sampling_rate=MODEL_SAMPLE_RATE)
+        wave = loaded.wave
         if wave.ndim != 1:
-            raise ValueError(
-                f"音声ファイルはモノラルにしてください: {self.wave_path}: shape={wave.shape}"
-            )
-        if sr != MODEL_SAMPLE_RATE:
-            wave = librosa.resample(wave, orig_sr=sr, target_sr=MODEL_SAMPLE_RATE)
+            wave = wave.mean(axis=1)
         return InputData(
             wave=wave,
             phoneme_list=OjtPhoneme.loads_julius_list(

@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from ..config import NetworkConfig
 from ..data.data import vowels
 from .conformer.encoder import Encoder
-from .ssl_feature_models import HubertModel, load_ssl_model
+from .ssl_feature_models import HubertModel, create_base_hubert_config, load_ssl_model
 from .transformer.utility import make_non_pad_mask
 
 
@@ -50,7 +50,7 @@ class Predictor(nn.Module):
         wave_length: Tensor,  # (B,)
         mora_length: Tensor,  # (B,)
     ) -> Tensor:  # (B, max(mL), 2, 4)
-        attention_mask = _make_wave_attention_mask(wave, wave_length)  # (B, max(wL))
+        attention_mask = make_non_pad_mask(wave_length).long()  # (B, max(wL))
         hidden_layers = self.ssl_model.extract_hidden_layers(wave, attention_mask)
         feature = torch.stack(list(hidden_layers), dim=-1)  # (B, max(fL), ?, 12)
         feature = feature.flatten(start_dim=2)  # (B, max(fL), ?)
@@ -134,17 +134,8 @@ class Predictor(nn.Module):
         return x[:, :max_mora_length]
 
 
-def _make_wave_attention_mask(wave: Tensor, wave_length: Tensor) -> Tensor:
-    """音声波形の有効長からattention maskを作成する。"""
-    _, max_length = wave.shape
-    indices = torch.arange(max_length, device=wave.device).unsqueeze(0)  # (1, max(wL))
-    return (indices < wave_length.unsqueeze(1)).long()  # (B, max(wL))
-
-
 def _compute_ssl_frame_lengths(wave_length: Tensor) -> Tensor:
     """音声長からSSL特徴量のフレーム数を計算する。"""
-    from .ssl_feature_models import create_base_hubert_config
-
     config = create_base_hubert_config()
     lengths = wave_length.clone()
     for kernel, stride in zip(config.conv_kernel, config.conv_stride, strict=True):
