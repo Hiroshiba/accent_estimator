@@ -23,10 +23,14 @@ dataset:
   eval_for_test: true
   eval_times_num: 1
   seed: 42
+  sampling_rate: 16000
+  frame_rate: 50
 
 network:
   ssl_model_type: "hubert"
   ssl_model_path: "not/exist/path"
+  sampling_rate: 16000
+  frame_rate: 50
   vowel_embedding_size: 4
   frame_reduction_factor: 1
   hidden_size: 16

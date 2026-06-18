@@ -1,5 +1,7 @@
 """メインのネットワークモジュール"""
 
+import math
+
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
@@ -17,6 +19,8 @@ class Predictor(nn.Module):
     def __init__(
         self,
         ssl_model: HubertModel,
+        sampling_rate: int,
+        frame_rate: float,
         vowel_size: int,
         vowel_embedding_size: int,
         speaker_size: int,
@@ -28,6 +32,8 @@ class Predictor(nn.Module):
         super().__init__()
 
         self.ssl_model = ssl_model
+        self.sampling_rate = sampling_rate
+        self.frame_rate = frame_rate
         feature_size = ssl_model.config.num_hidden_layers * ssl_model.config.hidden_size
 
         self.vowel_embedder = nn.Embedding(vowel_size, vowel_embedding_size)
@@ -54,11 +60,16 @@ class Predictor(nn.Module):
         hidden_layers = self.ssl_model.extract_hidden_layers(wave, attention_mask)
         feature = torch.stack(list(hidden_layers), dim=-1)  # (B, max(fL), ?, 12)
         feature = feature.flatten(start_dim=2)  # (B, max(fL), ?)
-        frame_length = _compute_ssl_frame_lengths(wave_length)  # (B,)
 
         fL = min(int(feature.size(1)), int(mora_index.size(1)))
         feature = feature[:, :fL, :]
         mora_index = mora_index[:, :fL]
+
+        # NOTE: HuBERTの出力長は75%が1フレーム短いので微調整
+        # FIXME: 本当はより正確に計算すべき
+        frame_length = torch.round(
+            wave_length.float() / self.sampling_rate * self.frame_rate
+        ).long()  # (B,)
         frame_length = torch.clamp(frame_length, max=fL)
 
         if self.frame_reduction_factor > 1:
@@ -134,22 +145,20 @@ class Predictor(nn.Module):
         return x[:, :max_mora_length]
 
 
-def _compute_ssl_frame_lengths(wave_length: Tensor) -> Tensor:
-    """音声長からSSL特徴量のフレーム数を計算する。"""
-    config = create_base_hubert_config()
-    lengths = wave_length.clone()
-    for kernel, stride in zip(config.conv_kernel, config.conv_stride, strict=True):
-        lengths = (lengths - kernel) // stride + 1
-    return lengths
-
-
 def create_predictor(config: NetworkConfig) -> Predictor:
     """設定からPredictorを作成"""
+    hubert_config = create_base_hubert_config()
+    expected_frame_rate = config.sampling_rate / math.prod(hubert_config.conv_stride)
+    assert config.frame_rate == expected_frame_rate, (
+        f"network.frame_rateがSSLモデルの実際のフレームレートと一致しません: "
+        f"config={config.frame_rate}, expected={expected_frame_rate}"
+    )
     ssl_model = load_ssl_model(
         model_type=config.ssl_model_type,
         model_path=config.ssl_model_path,
         device=torch.device("cpu"),
     )
+
     encoder = Encoder(
         hidden_size=config.hidden_size,
         condition_size=0,
@@ -166,6 +175,8 @@ def create_predictor(config: NetworkConfig) -> Predictor:
     )
     return Predictor(
         ssl_model=ssl_model,
+        sampling_rate=config.sampling_rate,
+        frame_rate=config.frame_rate,
         vowel_size=len(vowels),
         vowel_embedding_size=config.vowel_embedding_size,
         speaker_size=config.speaker_size,

@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 from .phoneme import BasePhoneme
+from .wave import Wave
 
 vowels = ("pau", "a", "i", "u", "e", "o", "n", "cl")
 
@@ -31,6 +32,7 @@ class InputData:
     """データ処理前のデータ構造"""
 
     wave: numpy.ndarray
+    sampling_rate: int
     phoneme_list: list[BasePhoneme]
     accent_start: list[bool]
     accent_end: list[bool]
@@ -50,11 +52,14 @@ class OutputData:
     speaker_id: Tensor
 
 
-def preprocess(d: InputData, *, is_eval: bool, frame_length: int) -> OutputData:
+def preprocess(
+    d: InputData, *, is_eval: bool, sampling_rate: int, frame_rate: float
+) -> OutputData:
     """データ処理"""
     _ = is_eval
 
-    frame_rate = 50
+    resampled = Wave(d.wave, d.sampling_rate).resample(sampling_rate)
+    frame_length = round(len(resampled) / sampling_rate * frame_rate)
 
     assert len(d.phoneme_list) == len(d.accent_start), (
         f"音素列とアクセント列の長さが一致しません: "
@@ -84,7 +89,7 @@ def preprocess(d: InputData, *, is_eval: bool, frame_length: int) -> OutputData:
 
     return OutputData(
         vowel=torch.from_numpy(vowel).long(),
-        wave=torch.from_numpy(numpy.asarray(d.wave, dtype=numpy.float32)),
+        wave=torch.from_numpy(numpy.asarray(resampled, dtype=numpy.float32)),
         mora_index=torch.from_numpy(mora_index).long(),
         accent=torch.from_numpy(accent).long(),
         speaker_id=torch.tensor(d.speaker_id).long(),

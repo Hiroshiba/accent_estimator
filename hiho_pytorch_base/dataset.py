@@ -20,11 +20,6 @@ from .config import DataFileConfig, DatasetConfig
 from .data.data import InputData, OutputData, preprocess
 from .data.phoneme import OjtPhoneme
 from .data.wave import Wave
-from .network.ssl_feature_models import (
-    MODEL_SAMPLE_RATE,
-    compute_ssl_frame_length,
-    create_base_hubert_config,
-)
 from .utility.pathlist_utility import get_data_paths
 from .utility.upath_utility import to_local_path
 
@@ -86,6 +81,7 @@ class LazyInputData:
 
         with h5py.File(local_path, "w") as f:
             f.create_dataset("wave", data=d.wave)
+            f.attrs["sampling_rate"] = d.sampling_rate
             phoneme_text = "\n".join(
                 f"{p.start:.4f}\t{p.end:.4f}\t{p.phoneme}" for p in d.phoneme_list
             )
@@ -114,6 +110,7 @@ class LazyInputData:
             phoneme_list = OjtPhoneme.loads_julius_list(phoneme_text)
             return InputData(
                 wave=numpy.array(f["wave"]),
+                sampling_rate=int(f.attrs["sampling_rate"]),  # type: ignore
                 phoneme_list=phoneme_list,
                 accent_start=numpy.array(f["accent_start"]).astype(bool).tolist(),
                 accent_end=numpy.array(f["accent_end"]).astype(bool).tolist(),
@@ -127,12 +124,13 @@ class LazyInputData:
             )
 
     def _fetch_from_files(self) -> InputData:
-        loaded = Wave.load(to_local_path(self.wave_path), sampling_rate=MODEL_SAMPLE_RATE)
+        loaded = Wave.load(to_local_path(self.wave_path))
         wave = loaded.wave
         if wave.ndim != 1:
             wave = wave.mean(axis=1)
         return InputData(
             wave=wave,
+            sampling_rate=loaded.sampling_rate,
             phoneme_list=OjtPhoneme.loads_julius_list(
                 to_local_path(self.phoneme_list_path).read_text()
             ),
@@ -212,11 +210,11 @@ class Dataset(BaseDataset[OutputData]):
         """指定されたインデックスのデータを前処理して返す"""
         try:
             input_data = self.datas[i].fetch()
-            frame_length = compute_ssl_frame_length(
-                len(input_data.wave), create_base_hubert_config()
-            )
             return preprocess(
-                input_data, is_eval=self.is_eval, frame_length=frame_length
+                input_data,
+                is_eval=self.is_eval,
+                sampling_rate=self.config.sampling_rate,
+                frame_rate=self.config.frame_rate,
             )
         except Exception as e:
             raise RuntimeError(

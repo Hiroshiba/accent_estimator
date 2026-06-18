@@ -38,6 +38,8 @@ class DatasetConfig(_Model):
     eval_for_test: bool
     eval_times_num: int = 1
     seed: int = 0
+    sampling_rate: int
+    frame_rate: float
 
 
 class NetworkConfig(_Model):
@@ -45,6 +47,8 @@ class NetworkConfig(_Model):
 
     ssl_model_type: Literal["hubert", "contentvec"]
     ssl_model_path: UPathField
+    sampling_rate: int
+    frame_rate: float
     vowel_embedding_size: int
     frame_reduction_factor: int
     hidden_size: int
@@ -120,6 +124,8 @@ class Config(_Model):
     def validate_config(self) -> None:
         """設定の妥当性を検証"""
         assert self.train.eval_epoch % self.train.log_epoch == 0
+        assert self.dataset.sampling_rate == self.network.sampling_rate
+        assert self.dataset.frame_rate == self.network.frame_rate
 
     def add_git_info(self) -> None:
         """Git情報をプロジェクトタグに追加"""
