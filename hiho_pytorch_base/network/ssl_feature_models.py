@@ -27,24 +27,6 @@ CheckpointKind = Literal["fairseq", "huggingface"]
 
 
 @dataclass(frozen=True)
-class BaseModelOutput:
-    """Hugging Face の BaseModelOutput に相当する出力を表す。"""
-
-    last_hidden_state: Tensor
-    hidden_states: tuple[Tensor, ...] | None
-    attentions: tuple[Tensor, ...] | None
-
-    def __getitem__(self, index: int) -> Tensor | tuple[Tensor, ...]:
-        """tuple 互換の添字アクセスを返す。"""
-        values: list[Tensor | tuple[Tensor, ...]] = [self.last_hidden_state]
-        if self.hidden_states is not None:
-            values.append(self.hidden_states)
-        if self.attentions is not None:
-            values.append(self.attentions)
-        return values[index]
-
-
-@dataclass(frozen=True)
 class HubertConfig:
     """HuBERT base の構成を表す。"""
 
@@ -83,7 +65,7 @@ def _get_conv_output_lengths(
     )
     output_lengths = output_lengths + 1
     if bool(torch.any(output_lengths <= 0).item()):
-        raise ValueError(f"畳み込み後の長さが0以下です: {output_lengths.tolist()}")
+        raise ValueError("畳み込み後の長さが0以下です")
     return output_lengths
 
 
@@ -168,23 +150,15 @@ class Fp32MaskedGroupNorm(nn.Module):
         hidden_lengths: Tensor,
     ) -> None:
         if hidden_states.ndim != 3:
-            raise ValueError(
-                f"GroupNorm 入力は3次元にしてください: {tuple(hidden_states.shape)}"
-            )
+            raise ValueError("GroupNorm 入力は3次元にしてください")
         if hidden_lengths.ndim != 1:
-            raise ValueError(
-                f"hidden_lengths は1次元にしてください: {tuple(hidden_lengths.shape)}"
-            )
+            raise ValueError("hidden_lengths は1次元にしてください")
         if hidden_lengths.shape[0] != hidden_states.shape[0]:
-            raise ValueError(
-                f"hidden_lengths の batch size が入力と一致しません: {tuple(hidden_lengths.shape)}, {tuple(hidden_states.shape)}"
-            )
+            raise ValueError("hidden_lengths の batch size が入力と一致しません")
         if bool(torch.any(hidden_lengths <= 0).item()):
-            raise ValueError(f"hidden_lengths が0以下です: {hidden_lengths.tolist()}")
+            raise ValueError("hidden_lengths が0以下です")
         if bool(torch.any(hidden_lengths > hidden_states.shape[-1]).item()):
-            raise ValueError(
-                f"hidden_lengths が系列長を超えています: {hidden_lengths.tolist()}, {hidden_states.shape[-1]}"
-            )
+            raise ValueError("hidden_lengths が系列長を超えています")
 
 
 class HubertGroupNormConvLayer(nn.Module):
@@ -435,8 +409,7 @@ class HubertAttention(nn.Module):
         self,
         hidden_states: Tensor,
         attention_mask: Tensor | None,
-        output_attentions: bool,
-    ) -> tuple[Tensor, Tensor | None]:
+    ) -> Tensor:
         """attention 出力を返す。"""
         batch_size, frame_count, hidden_size = hidden_states.shape
         query_states = self._shape(self.q_proj(hidden_states), batch_size, frame_count)
@@ -459,10 +432,7 @@ class HubertAttention(nn.Module):
             frame_count,
             hidden_size,
         )
-        attention_output = self.out_proj(attention_output)
-        if output_attentions:
-            return attention_output, attention_weights
-        return attention_output, None
+        return self.out_proj(attention_output)
 
     def _shape(self, states: Tensor, batch_size: int, frame_count: int) -> Tensor:
         return states.view(
@@ -512,21 +482,18 @@ class HubertEncoderLayer(nn.Module):
         self,
         hidden_states: Tensor,
         attention_mask: Tensor | None,
-        output_attentions: bool,
-    ) -> tuple[Tensor, Tensor | None]:
+    ) -> Tensor:
         """encoder layer の出力を返す。"""  # noqa: D401
         attention_residual = hidden_states
-        hidden_states, attention_weights = self.attention(
+        hidden_states = self.attention(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
-            output_attentions=output_attentions,
         )
         hidden_states = self.dropout(hidden_states)
         hidden_states = attention_residual + hidden_states
         hidden_states = self.layer_norm(hidden_states)
         hidden_states = hidden_states + self.feed_forward(hidden_states)
-        hidden_states = self.final_layer_norm(hidden_states)
-        return hidden_states, attention_weights
+        return self.final_layer_norm(hidden_states)
 
 
 class HubertEncoder(nn.Module):
@@ -534,7 +501,7 @@ class HubertEncoder(nn.Module):
 
     def __init__(self, config: HubertConfig) -> None:
         super().__init__()
-        self.config = config
+        self.layerdrop: float = config.layerdrop
         self.pos_conv_embed = HubertPositionalConvEmbedding(config)
         self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout)
@@ -546,18 +513,8 @@ class HubertEncoder(nn.Module):
         self,
         hidden_states: Tensor,
         attention_mask: Tensor | None,
-        output_attentions: bool,
-        output_hidden_states: bool,
-        return_dict: bool,
-    ) -> BaseModelOutput | tuple[Tensor, ...]:
-        """encoder 出力を返す。"""  # noqa: D401
-        all_hidden_states: tuple[Tensor, ...] | None = (
-            () if output_hidden_states else None
-        )
-        all_self_attentions: tuple[Tensor, ...] | None = (
-            () if output_attentions else None
-        )
-
+    ) -> list[Tensor]:
+        """各層後の hidden state のリストを返す。"""
         if attention_mask is not None:
             expanded_attention_mask = attention_mask.unsqueeze(-1).expand(
                 -1,
@@ -566,7 +523,7 @@ class HubertEncoder(nn.Module):
             )
             hidden_states = hidden_states.masked_fill(~expanded_attention_mask, 0.0)
 
-        additive_attention_mask = create_bidirectional_attention_mask(
+        additive_attention_mask = _create_bidirectional_attention_mask(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
         )
@@ -576,51 +533,20 @@ class HubertEncoder(nn.Module):
         hidden_states = self.layer_norm(hidden_states)
         hidden_states = self.dropout(hidden_states)
 
+        all_hidden_states: list[Tensor] = []
         for layer in self.layers:
-            if output_hidden_states:
-                if all_hidden_states is None:
-                    raise ValueError("hidden states の保存先がありません")
-                all_hidden_states = all_hidden_states + (hidden_states,)
+            all_hidden_states.append(hidden_states)
 
             dropout_probability = torch.rand([], device=hidden_states.device)
-            skip_the_layer = (
-                self.training and dropout_probability < self.config.layerdrop
-            )
-            if not skip_the_layer:
-                layer_outputs = layer(
+            skip = self.training and dropout_probability < self.layerdrop
+            if not skip:
+                hidden_states = layer(
                     hidden_states=hidden_states,
                     attention_mask=additive_attention_mask,
-                    output_attentions=output_attentions,
                 )
-                hidden_states = layer_outputs[0]
-            else:
-                layer_outputs = (hidden_states, None)
 
-            if output_attentions:
-                if all_self_attentions is None:
-                    raise ValueError("attention の保存先がありません")
-                attention = layer_outputs[1]
-                if attention is None:
-                    raise ValueError("attention がありません")
-                all_self_attentions = all_self_attentions + (attention,)
-
-        if output_hidden_states:
-            if all_hidden_states is None:
-                raise ValueError("hidden states の保存先がありません")
-            all_hidden_states = all_hidden_states + (hidden_states,)
-
-        if not return_dict:
-            outputs: tuple[Tensor | tuple[Tensor, ...], ...] = (hidden_states,)
-            if all_hidden_states is not None:
-                outputs = outputs + (all_hidden_states,)
-            if all_self_attentions is not None:
-                outputs = outputs + (all_self_attentions,)
-            return outputs
-        return BaseModelOutput(
-            last_hidden_state=hidden_states,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attentions,
-        )
+        all_hidden_states.append(hidden_states)
+        return all_hidden_states
 
 
 class HubertModel(nn.Module):
@@ -628,24 +554,20 @@ class HubertModel(nn.Module):
 
     def __init__(self, config: HubertConfig) -> None:
         super().__init__()
-        self.config = config
+        self.num_hidden_layers: int = config.num_hidden_layers
+        self.hidden_size: int = config.hidden_size
         self.feature_extractor = HubertFeatureEncoder(config)
         self.feature_projection = HubertFeatureProjection(config)
         self.encoder = HubertEncoder(config)
 
-    def forward(
+    def extract_hidden_layers(
         self,
         input_values: Tensor,
         attention_mask: Tensor | None = None,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
-        return_dict: bool = True,
-    ) -> BaseModelOutput | tuple[Tensor, ...]:
-        """HuBERT の出力を返す。"""
+    ) -> list[Tensor]:
+        """Transformer 各層後の hidden state を返す。"""  # noqa: D401
         if input_values.ndim != 2:
-            raise ValueError(
-                f"入力波形は2次元にしてください: {tuple(input_values.shape)}"
-            )
+            raise ValueError("入力波形は2次元にしてください")
 
         input_lengths: Tensor | None = None
         if attention_mask is not None:
@@ -669,62 +591,32 @@ class HubertModel(nn.Module):
             )
 
         hidden_states = self.feature_projection(extract_features)
-        return self.encoder(
+        all_hidden_states = self.encoder(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
-
-    def extract_hidden_layers(
-        self,
-        input_values: Tensor,
-        attention_mask: Tensor | None = None,
-    ) -> tuple[Tensor, ...]:
-        """Transformer 各層後の hidden state を返す。"""  # noqa: D401
-        outputs = self(
-            input_values=input_values,
-            attention_mask=attention_mask,
-            output_attentions=False,
-            output_hidden_states=True,
-            return_dict=True,
-        )
-        if not isinstance(outputs, BaseModelOutput):
-            raise TypeError(
-                f"HuBERT 出力が BaseModelOutput ではありません: {type(outputs)}"
-            )
-        if outputs.hidden_states is None:
-            raise ValueError("hidden_states がありません")
-        return outputs.hidden_states[1:]
+        return all_hidden_states[1:]
 
     def _get_input_lengths(
         self,
         input_values: Tensor,
         attention_mask: Tensor,
     ) -> Tensor:
-        if attention_mask.shape != input_values.shape:
-            raise ValueError(
-                f"attention_mask の形状が入力波形と一致しません: {tuple(attention_mask.shape)}, {tuple(input_values.shape)}"
-            )
-        if attention_mask.device != input_values.device:
-            raise ValueError(
-                f"attention_mask の device が入力波形と一致しません: {attention_mask.device}, {input_values.device}"
-            )
         if bool(torch.any((attention_mask != 0) & (attention_mask != 1)).item()):
             raise ValueError("attention_mask は0または1だけにしてください")
 
-        attention_mask_bool = attention_mask.bool()
-        if attention_mask_bool.shape[1] >= 2:
-            mask_increases = attention_mask_bool[:, 1:] & ~attention_mask_bool[:, :-1]
+        if attention_mask.shape[1] >= 2:
+            mask_increases = (attention_mask[:, 1:] == 1) & (
+                attention_mask[:, :-1] == 0
+            )
             if bool(torch.any(mask_increases).item()):
                 raise ValueError(
                     "attention_mask は左詰めの padding mask にしてください"
                 )
 
-        input_lengths = attention_mask_bool.to(torch.long).sum(dim=-1)
+        input_lengths = attention_mask.to(torch.long).sum(dim=-1)
         if bool(torch.any(input_lengths <= 0).item()):
-            raise ValueError(f"入力長が0以下です: {input_lengths.tolist()}")
+            raise ValueError("入力長が0以下です")
         return input_lengths
 
     def _get_feature_vector_attention_mask(
@@ -735,11 +627,9 @@ class HubertModel(nn.Module):
         """feature-level attention mask を返す。"""
         output_lengths = output_lengths.to(torch.long)
         if bool(torch.any(output_lengths <= 0).item()):
-            raise ValueError(f"畳み込み後の長さが0以下です: {output_lengths.tolist()}")
+            raise ValueError("畳み込み後の長さが0以下です")
         if bool(torch.any(output_lengths > feature_vector_length).item()):
-            raise ValueError(
-                f"畳み込み後の長さが feature_vector_length を超えています: {output_lengths.tolist()}, {feature_vector_length}"
-            )
+            raise ValueError("畳み込み後の長さが feature_vector_length を超えています")
 
         batch_size = output_lengths.shape[0]
         feature_attention_mask = torch.zeros(
@@ -752,10 +642,10 @@ class HubertModel(nn.Module):
             output_lengths - 1,
         ] = True
         feature_attention_mask = feature_attention_mask.flip([-1]).cumsum(-1).flip([-1])
-        return feature_attention_mask.bool()
+        return feature_attention_mask > 0
 
 
-def create_bidirectional_attention_mask(
+def _create_bidirectional_attention_mask(
     hidden_states: Tensor,
     attention_mask: Tensor | None,
 ) -> Tensor | None:
@@ -766,7 +656,7 @@ def create_bidirectional_attention_mask(
     additive_attention_mask = additive_attention_mask.to(dtype=hidden_states.dtype)
     additive_attention_mask = 1.0 - additive_attention_mask
     additive_attention_mask = (
-        additive_attention_mask * torch.finfo(hidden_states.dtype).min
+        additive_attention_mask * -3.4028235e38  # NOTE: float32 の最小値
     )
     return additive_attention_mask
 
@@ -777,9 +667,9 @@ def load_japanese_hubert_model(model_path: UPath, device: torch.device) -> Huber
     config = create_base_hubert_config()
     model = HubertModel(config)
     if checkpoint_kind == "fairseq":
-        converted_state = _convert_fairseq_hubert_state(state, config)
+        converted_state = _convert_fairseq_state(state, config)
     elif checkpoint_kind == "huggingface":
-        converted_state = _convert_huggingface_hubert_state(state, config)
+        converted_state = _convert_huggingface_state(state, config)
     else:
         raise ValueError(f"未対応のチェックポイント形式です: {checkpoint_kind}")
     model.load_state_dict(converted_state, strict=True)
@@ -795,7 +685,7 @@ def load_contentvec_model(model_path: UPath, device: torch.device) -> HubertMode
         raise ValueError(f"ContentVec は fairseq 形式だけ対応しています: {model_path}")
     config = create_base_hubert_config()
     model = HubertModel(config)
-    converted_state = _convert_fairseq_contentvec_state(state, config)
+    converted_state = _convert_fairseq_state(state, config)
     model.load_state_dict(converted_state, strict=True)
     model.eval()
     model.to(device)
@@ -913,345 +803,216 @@ def _strip_prefix(state: Mapping[str, Tensor], prefix: str) -> dict[str, Tensor]
     return stripped_state
 
 
-def _convert_fairseq_hubert_state(
-    state: Mapping[str, Tensor],
-    config: HubertConfig,
-) -> dict[str, Tensor]:
-    return _convert_fairseq_state(
-        state=state,
-        config=config,
-        target_prefix="",
-    )
-
-
-def _convert_fairseq_contentvec_state(
-    state: Mapping[str, Tensor],
-    config: HubertConfig,
-) -> dict[str, Tensor]:
-    return _convert_fairseq_state(
-        state=state,
-        config=config,
-        target_prefix="",
-    )
-
-
 def _convert_fairseq_state(
     state: Mapping[str, Tensor],
     config: HubertConfig,
-    target_prefix: str,
 ) -> dict[str, Tensor]:
     converted_state: dict[str, Tensor] = {}
     for index in range(len(config.conv_dim)):
-        converted_state[
-            f"{target_prefix}feature_extractor.conv_layers.{index}.conv.weight"
-        ] = _require_tensor(state, f"feature_extractor.conv_layers.{index}.0.weight")
-    converted_state[
-        f"{target_prefix}feature_extractor.conv_layers.0.layer_norm._group_norm.weight"
-    ] = _require_tensor(state, "feature_extractor.conv_layers.0.2.weight")
-    converted_state[
-        f"{target_prefix}feature_extractor.conv_layers.0.layer_norm._group_norm.bias"
-    ] = _require_tensor(state, "feature_extractor.conv_layers.0.2.bias")
-    converted_state[f"{target_prefix}feature_projection.layer_norm.weight"] = (
-        _require_tensor(
-            state,
-            "layer_norm.weight",
+        converted_state[f"feature_extractor.conv_layers.{index}.conv.weight"] = (
+            _require_tensor(state, f"feature_extractor.conv_layers.{index}.0.weight")
         )
+    converted_state["feature_extractor.conv_layers.0.layer_norm._group_norm.weight"] = (
+        _require_tensor(state, "feature_extractor.conv_layers.0.2.weight")
     )
-    converted_state[f"{target_prefix}feature_projection.layer_norm.bias"] = (
-        _require_tensor(
-            state,
-            "layer_norm.bias",
-        )
+    converted_state["feature_extractor.conv_layers.0.layer_norm._group_norm.bias"] = (
+        _require_tensor(state, "feature_extractor.conv_layers.0.2.bias")
     )
-    converted_state[f"{target_prefix}feature_projection.projection.weight"] = (
-        _require_tensor(
-            state,
-            "post_extract_proj.weight",
-        )
+    converted_state["feature_projection.layer_norm.weight"] = _require_tensor(
+        state, "layer_norm.weight"
     )
-    converted_state[f"{target_prefix}feature_projection.projection.bias"] = (
-        _require_tensor(
-            state,
-            "post_extract_proj.bias",
-        )
+    converted_state["feature_projection.layer_norm.bias"] = _require_tensor(
+        state, "layer_norm.bias"
     )
-    converted_state.update(
-        _convert_common_fairseq_encoder_state(
-            state=state,
-            config=config,
-            target_prefix=target_prefix,
-        )
+    converted_state["feature_projection.projection.weight"] = _require_tensor(
+        state, "post_extract_proj.weight"
     )
+    converted_state["feature_projection.projection.bias"] = _require_tensor(
+        state, "post_extract_proj.bias"
+    )
+    converted_state.update(_convert_fairseq_encoder_state(state, config))
     return converted_state
 
 
-def _convert_common_fairseq_encoder_state(
+def _convert_fairseq_encoder_state(
     state: Mapping[str, Tensor],
     config: HubertConfig,
-    target_prefix: str,
 ) -> dict[str, Tensor]:
     converted_state: dict[str, Tensor] = {
-        f"{target_prefix}encoder.pos_conv_embed.conv.weight_g": _require_tensor(
-            state,
-            "encoder.pos_conv.0.weight_g",
+        "encoder.pos_conv_embed.conv.weight_g": _require_tensor(
+            state, "encoder.pos_conv.0.weight_g"
         ),
-        f"{target_prefix}encoder.pos_conv_embed.conv.weight_v": _require_tensor(
-            state,
-            "encoder.pos_conv.0.weight_v",
+        "encoder.pos_conv_embed.conv.weight_v": _require_tensor(
+            state, "encoder.pos_conv.0.weight_v"
         ),
-        f"{target_prefix}encoder.pos_conv_embed.conv.bias": _require_tensor(
-            state,
-            "encoder.pos_conv.0.bias",
+        "encoder.pos_conv_embed.conv.bias": _require_tensor(
+            state, "encoder.pos_conv.0.bias"
         ),
-        f"{target_prefix}encoder.layer_norm.weight": _require_tensor(
-            state,
-            "encoder.layer_norm.weight",
+        "encoder.layer_norm.weight": _require_tensor(
+            state, "encoder.layer_norm.weight"
         ),
-        f"{target_prefix}encoder.layer_norm.bias": _require_tensor(
-            state,
-            "encoder.layer_norm.bias",
-        ),
+        "encoder.layer_norm.bias": _require_tensor(state, "encoder.layer_norm.bias"),
     }
     for index in range(config.num_hidden_layers):
-        fairseq_prefix = f"encoder.layers.{index}"
-        model_prefix = f"{target_prefix}encoder.layers.{index}"
+        src = f"encoder.layers.{index}"
+        dst = f"encoder.layers.{index}"
         converted_state.update(
             {
-                f"{model_prefix}.attention.k_proj.weight": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.self_attn.k_proj.weight",
+                f"{dst}.attention.k_proj.weight": _require_tensor(
+                    state, f"{src}.self_attn.k_proj.weight"
                 ),
-                f"{model_prefix}.attention.k_proj.bias": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.self_attn.k_proj.bias",
+                f"{dst}.attention.k_proj.bias": _require_tensor(
+                    state, f"{src}.self_attn.k_proj.bias"
                 ),
-                f"{model_prefix}.attention.v_proj.weight": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.self_attn.v_proj.weight",
+                f"{dst}.attention.v_proj.weight": _require_tensor(
+                    state, f"{src}.self_attn.v_proj.weight"
                 ),
-                f"{model_prefix}.attention.v_proj.bias": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.self_attn.v_proj.bias",
+                f"{dst}.attention.v_proj.bias": _require_tensor(
+                    state, f"{src}.self_attn.v_proj.bias"
                 ),
-                f"{model_prefix}.attention.q_proj.weight": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.self_attn.q_proj.weight",
+                f"{dst}.attention.q_proj.weight": _require_tensor(
+                    state, f"{src}.self_attn.q_proj.weight"
                 ),
-                f"{model_prefix}.attention.q_proj.bias": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.self_attn.q_proj.bias",
+                f"{dst}.attention.q_proj.bias": _require_tensor(
+                    state, f"{src}.self_attn.q_proj.bias"
                 ),
-                f"{model_prefix}.attention.out_proj.weight": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.self_attn.out_proj.weight",
+                f"{dst}.attention.out_proj.weight": _require_tensor(
+                    state, f"{src}.self_attn.out_proj.weight"
                 ),
-                f"{model_prefix}.attention.out_proj.bias": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.self_attn.out_proj.bias",
+                f"{dst}.attention.out_proj.bias": _require_tensor(
+                    state, f"{src}.self_attn.out_proj.bias"
                 ),
-                f"{model_prefix}.layer_norm.weight": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.self_attn_layer_norm.weight",
+                f"{dst}.layer_norm.weight": _require_tensor(
+                    state, f"{src}.self_attn_layer_norm.weight"
                 ),
-                f"{model_prefix}.layer_norm.bias": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.self_attn_layer_norm.bias",
+                f"{dst}.layer_norm.bias": _require_tensor(
+                    state, f"{src}.self_attn_layer_norm.bias"
                 ),
-                f"{model_prefix}.feed_forward.intermediate_dense.weight": (
-                    _require_tensor(state, f"{fairseq_prefix}.fc1.weight")
+                f"{dst}.feed_forward.intermediate_dense.weight": _require_tensor(
+                    state, f"{src}.fc1.weight"
                 ),
-                f"{model_prefix}.feed_forward.intermediate_dense.bias": (
-                    _require_tensor(state, f"{fairseq_prefix}.fc1.bias")
+                f"{dst}.feed_forward.intermediate_dense.bias": _require_tensor(
+                    state, f"{src}.fc1.bias"
                 ),
-                f"{model_prefix}.feed_forward.output_dense.weight": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.fc2.weight",
+                f"{dst}.feed_forward.output_dense.weight": _require_tensor(
+                    state, f"{src}.fc2.weight"
                 ),
-                f"{model_prefix}.feed_forward.output_dense.bias": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.fc2.bias",
+                f"{dst}.feed_forward.output_dense.bias": _require_tensor(
+                    state, f"{src}.fc2.bias"
                 ),
-                f"{model_prefix}.final_layer_norm.weight": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.final_layer_norm.weight",
+                f"{dst}.final_layer_norm.weight": _require_tensor(
+                    state, f"{src}.final_layer_norm.weight"
                 ),
-                f"{model_prefix}.final_layer_norm.bias": _require_tensor(
-                    state,
-                    f"{fairseq_prefix}.final_layer_norm.bias",
+                f"{dst}.final_layer_norm.bias": _require_tensor(
+                    state, f"{src}.final_layer_norm.bias"
                 ),
             }
         )
     return converted_state
 
 
-def _convert_huggingface_hubert_state(
+def _convert_huggingface_state(
     state: Mapping[str, Tensor],
     config: HubertConfig,
-) -> dict[str, Tensor]:
-    converted_state = _filter_huggingface_hubert_state(
-        state=state,
-        config=config,
-        target_prefix="",
-    )
-    return converted_state
-
-
-def _filter_huggingface_hubert_state(
-    state: Mapping[str, Tensor],
-    config: HubertConfig,
-    target_prefix: str,
 ) -> dict[str, Tensor]:
     converted_state: dict[str, Tensor] = {}
     for index in range(len(config.conv_dim)):
-        source_prefix = f"feature_extractor.conv_layers.{index}"
-        target_layer_prefix = f"{target_prefix}{source_prefix}"
-        converted_state[f"{target_layer_prefix}.conv.weight"] = _require_tensor(
-            state,
-            f"{source_prefix}.conv.weight",
+        src = f"feature_extractor.conv_layers.{index}"
+        converted_state[f"{src}.conv.weight"] = _require_tensor(
+            state, f"{src}.conv.weight"
         )
-    converted_state[
-        f"{target_prefix}feature_extractor.conv_layers.0.layer_norm._group_norm.weight"
-    ] = _require_tensor(state, "feature_extractor.conv_layers.0.layer_norm.weight")
-    converted_state[
-        f"{target_prefix}feature_extractor.conv_layers.0.layer_norm._group_norm.bias"
-    ] = _require_tensor(state, "feature_extractor.conv_layers.0.layer_norm.bias")
-    converted_state[f"{target_prefix}feature_projection.layer_norm.weight"] = (
-        _require_tensor(
-            state,
-            "feature_projection.layer_norm.weight",
-        )
+    converted_state["feature_extractor.conv_layers.0.layer_norm._group_norm.weight"] = (
+        _require_tensor(state, "feature_extractor.conv_layers.0.layer_norm.weight")
     )
-    converted_state[f"{target_prefix}feature_projection.layer_norm.bias"] = (
-        _require_tensor(
-            state,
-            "feature_projection.layer_norm.bias",
-        )
+    converted_state["feature_extractor.conv_layers.0.layer_norm._group_norm.bias"] = (
+        _require_tensor(state, "feature_extractor.conv_layers.0.layer_norm.bias")
     )
-    converted_state[f"{target_prefix}feature_projection.projection.weight"] = (
-        _require_tensor(
-            state,
-            "feature_projection.projection.weight",
-        )
+    converted_state["feature_projection.layer_norm.weight"] = _require_tensor(
+        state, "feature_projection.layer_norm.weight"
     )
-    converted_state[f"{target_prefix}feature_projection.projection.bias"] = (
-        _require_tensor(
-            state,
-            "feature_projection.projection.bias",
-        )
+    converted_state["feature_projection.layer_norm.bias"] = _require_tensor(
+        state, "feature_projection.layer_norm.bias"
     )
-    converted_state.update(
-        _filter_common_huggingface_encoder_state(
-            state=state,
-            config=config,
-            target_prefix=target_prefix,
-        )
+    converted_state["feature_projection.projection.weight"] = _require_tensor(
+        state, "feature_projection.projection.weight"
     )
+    converted_state["feature_projection.projection.bias"] = _require_tensor(
+        state, "feature_projection.projection.bias"
+    )
+    converted_state.update(_convert_huggingface_encoder_state(state, config))
     return converted_state
 
 
-def _filter_common_huggingface_encoder_state(
+def _convert_huggingface_encoder_state(
     state: Mapping[str, Tensor],
     config: HubertConfig,
-    target_prefix: str,
 ) -> dict[str, Tensor]:
     converted_state: dict[str, Tensor] = {
-        f"{target_prefix}encoder.pos_conv_embed.conv.weight_g": _require_tensor(
-            state,
-            "encoder.pos_conv_embed.conv.weight_g",
+        "encoder.pos_conv_embed.conv.weight_g": _require_tensor(
+            state, "encoder.pos_conv_embed.conv.weight_g"
         ),
-        f"{target_prefix}encoder.pos_conv_embed.conv.weight_v": _require_tensor(
-            state,
-            "encoder.pos_conv_embed.conv.weight_v",
+        "encoder.pos_conv_embed.conv.weight_v": _require_tensor(
+            state, "encoder.pos_conv_embed.conv.weight_v"
         ),
-        f"{target_prefix}encoder.pos_conv_embed.conv.bias": _require_tensor(
-            state,
-            "encoder.pos_conv_embed.conv.bias",
+        "encoder.pos_conv_embed.conv.bias": _require_tensor(
+            state, "encoder.pos_conv_embed.conv.bias"
         ),
-        f"{target_prefix}encoder.layer_norm.weight": _require_tensor(
-            state,
-            "encoder.layer_norm.weight",
+        "encoder.layer_norm.weight": _require_tensor(
+            state, "encoder.layer_norm.weight"
         ),
-        f"{target_prefix}encoder.layer_norm.bias": _require_tensor(
-            state,
-            "encoder.layer_norm.bias",
-        ),
+        "encoder.layer_norm.bias": _require_tensor(state, "encoder.layer_norm.bias"),
     }
     for index in range(config.num_hidden_layers):
-        source_prefix = f"encoder.layers.{index}"
-        target_layer_prefix = f"{target_prefix}{source_prefix}"
+        prefix = f"encoder.layers.{index}"
         converted_state.update(
             {
-                f"{target_layer_prefix}.attention.k_proj.weight": _require_tensor(
-                    state,
-                    f"{source_prefix}.attention.k_proj.weight",
+                f"{prefix}.attention.k_proj.weight": _require_tensor(
+                    state, f"{prefix}.attention.k_proj.weight"
                 ),
-                f"{target_layer_prefix}.attention.k_proj.bias": _require_tensor(
-                    state,
-                    f"{source_prefix}.attention.k_proj.bias",
+                f"{prefix}.attention.k_proj.bias": _require_tensor(
+                    state, f"{prefix}.attention.k_proj.bias"
                 ),
-                f"{target_layer_prefix}.attention.v_proj.weight": _require_tensor(
-                    state,
-                    f"{source_prefix}.attention.v_proj.weight",
+                f"{prefix}.attention.v_proj.weight": _require_tensor(
+                    state, f"{prefix}.attention.v_proj.weight"
                 ),
-                f"{target_layer_prefix}.attention.v_proj.bias": _require_tensor(
-                    state,
-                    f"{source_prefix}.attention.v_proj.bias",
+                f"{prefix}.attention.v_proj.bias": _require_tensor(
+                    state, f"{prefix}.attention.v_proj.bias"
                 ),
-                f"{target_layer_prefix}.attention.q_proj.weight": _require_tensor(
-                    state,
-                    f"{source_prefix}.attention.q_proj.weight",
+                f"{prefix}.attention.q_proj.weight": _require_tensor(
+                    state, f"{prefix}.attention.q_proj.weight"
                 ),
-                f"{target_layer_prefix}.attention.q_proj.bias": _require_tensor(
-                    state,
-                    f"{source_prefix}.attention.q_proj.bias",
+                f"{prefix}.attention.q_proj.bias": _require_tensor(
+                    state, f"{prefix}.attention.q_proj.bias"
                 ),
-                f"{target_layer_prefix}.attention.out_proj.weight": _require_tensor(
-                    state,
-                    f"{source_prefix}.attention.out_proj.weight",
+                f"{prefix}.attention.out_proj.weight": _require_tensor(
+                    state, f"{prefix}.attention.out_proj.weight"
                 ),
-                f"{target_layer_prefix}.attention.out_proj.bias": _require_tensor(
-                    state,
-                    f"{source_prefix}.attention.out_proj.bias",
+                f"{prefix}.attention.out_proj.bias": _require_tensor(
+                    state, f"{prefix}.attention.out_proj.bias"
                 ),
-                f"{target_layer_prefix}.layer_norm.weight": _require_tensor(
-                    state,
-                    f"{source_prefix}.layer_norm.weight",
+                f"{prefix}.layer_norm.weight": _require_tensor(
+                    state, f"{prefix}.layer_norm.weight"
                 ),
-                f"{target_layer_prefix}.layer_norm.bias": _require_tensor(
-                    state,
-                    f"{source_prefix}.layer_norm.bias",
+                f"{prefix}.layer_norm.bias": _require_tensor(
+                    state, f"{prefix}.layer_norm.bias"
                 ),
-                f"{target_layer_prefix}.feed_forward.intermediate_dense.weight": (
-                    _require_tensor(
-                        state,
-                        f"{source_prefix}.feed_forward.intermediate_dense.weight",
-                    )
+                f"{prefix}.feed_forward.intermediate_dense.weight": _require_tensor(
+                    state, f"{prefix}.feed_forward.intermediate_dense.weight"
                 ),
-                f"{target_layer_prefix}.feed_forward.intermediate_dense.bias": (
-                    _require_tensor(
-                        state,
-                        f"{source_prefix}.feed_forward.intermediate_dense.bias",
-                    )
+                f"{prefix}.feed_forward.intermediate_dense.bias": _require_tensor(
+                    state, f"{prefix}.feed_forward.intermediate_dense.bias"
                 ),
-                f"{target_layer_prefix}.feed_forward.output_dense.weight": (
-                    _require_tensor(
-                        state,
-                        f"{source_prefix}.feed_forward.output_dense.weight",
-                    )
+                f"{prefix}.feed_forward.output_dense.weight": _require_tensor(
+                    state, f"{prefix}.feed_forward.output_dense.weight"
                 ),
-                f"{target_layer_prefix}.feed_forward.output_dense.bias": (
-                    _require_tensor(
-                        state,
-                        f"{source_prefix}.feed_forward.output_dense.bias",
-                    )
+                f"{prefix}.feed_forward.output_dense.bias": _require_tensor(
+                    state, f"{prefix}.feed_forward.output_dense.bias"
                 ),
-                f"{target_layer_prefix}.final_layer_norm.weight": _require_tensor(
-                    state,
-                    f"{source_prefix}.final_layer_norm.weight",
+                f"{prefix}.final_layer_norm.weight": _require_tensor(
+                    state, f"{prefix}.final_layer_norm.weight"
                 ),
-                f"{target_layer_prefix}.final_layer_norm.bias": _require_tensor(
-                    state,
-                    f"{source_prefix}.final_layer_norm.bias",
+                f"{prefix}.final_layer_norm.bias": _require_tensor(
+                    state, f"{prefix}.final_layer_norm.bias"
                 ),
             }
         )

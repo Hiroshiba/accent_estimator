@@ -4,7 +4,6 @@ import math
 
 import torch
 from torch import Tensor, nn
-from torch.nn import functional as F
 
 from ..config import NetworkConfig
 from ..data.data import vowels
@@ -25,7 +24,6 @@ class Predictor(nn.Module):
         vowel_embedding_size: int,
         speaker_size: int,
         speaker_embedding_size: int,
-        frame_reduction_factor: int,
         hidden_size: int,
         encoder: Encoder,
     ):
@@ -34,11 +32,10 @@ class Predictor(nn.Module):
         self.ssl_model = ssl_model
         self.sampling_rate = sampling_rate
         self.frame_rate = frame_rate
-        feature_size = ssl_model.config.num_hidden_layers * ssl_model.config.hidden_size
+        feature_size = ssl_model.num_hidden_layers * ssl_model.hidden_size
 
         self.vowel_embedder = nn.Embedding(vowel_size, vowel_embedding_size)
         self.speaker_embedder = nn.Embedding(speaker_size, speaker_embedding_size)
-        self.frame_reduction_factor = frame_reduction_factor
 
         self.pre_mora = nn.Linear(
             feature_size + vowel_embedding_size + speaker_embedding_size, hidden_size
@@ -58,7 +55,7 @@ class Predictor(nn.Module):
     ) -> Tensor:  # (B, max(mL), 2, 4)
         attention_mask = make_non_pad_mask(wave_length).long()  # (B, max(wL))
         hidden_layers = self.ssl_model.extract_hidden_layers(wave, attention_mask)
-        feature = torch.stack(list(hidden_layers), dim=-1)  # (B, max(fL), ?, 12)
+        feature = torch.stack(hidden_layers, dim=-1)  # (B, max(fL), ?, 12)
         feature = feature.flatten(start_dim=2)  # (B, max(fL), ?)
 
         fL = min(int(feature.size(1)), int(mora_index.size(1)))
@@ -72,25 +69,10 @@ class Predictor(nn.Module):
         ).long()  # (B,)
         frame_length = torch.clamp(frame_length, max=fL)
 
-        if self.frame_reduction_factor > 1:
-            reduced_feature = F.avg_pool1d(
-                feature.transpose(1, 2),
-                kernel_size=self.frame_reduction_factor,
-                stride=self.frame_reduction_factor,
-            ).transpose(1, 2)  # (B, max(fL)//r, ?)
-            reduced_frame_length = frame_length // self.frame_reduction_factor
-            reduced_mora_index = (
-                mora_index[:, : reduced_feature.size(1)] // self.frame_reduction_factor
-            )
-        else:
-            reduced_feature = feature
-            reduced_frame_length = frame_length
-            reduced_mora_index = mora_index
-
         mora_feature = self._aggregate_to_mora(
-            feature=reduced_feature,
-            frame_length=reduced_frame_length,
-            mora_index=reduced_mora_index,
+            feature=feature,
+            frame_length=frame_length,
+            mora_index=mora_index,
             mora_length=mora_length,
         )  # (B, max(mL), ?)
 
@@ -181,7 +163,6 @@ def create_predictor(config: NetworkConfig) -> Predictor:
         vowel_embedding_size=config.vowel_embedding_size,
         speaker_size=config.speaker_size,
         speaker_embedding_size=config.speaker_embedding_size,
-        frame_reduction_factor=config.frame_reduction_factor,
         hidden_size=config.hidden_size,
         encoder=encoder,
     )

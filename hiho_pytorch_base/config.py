@@ -50,7 +50,6 @@ class NetworkConfig(_Model):
     sampling_rate: int
     frame_rate: float
     vowel_embedding_size: int
-    frame_reduction_factor: int
     hidden_size: int
     conformer_block_num: int
     conformer_dropout_rate: float

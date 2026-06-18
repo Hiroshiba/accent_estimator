@@ -214,9 +214,7 @@ def setup_training_context(
     print("predictor:", predictor)
 
     # model
-    # FIXME: HubertModel が torch.jit.script 非対応のため無効化。対応後に復活させる。
-    # predictor_scripted: Predictor = torch.jit.script(predictor)
-    predictor_scripted = predictor
+    predictor_scripted: Predictor = torch.jit.script(predictor)  # type: ignore
     model = Model(model_config=config.model, predictor=predictor_scripted)
     if config.train.weight_initializer is not None:
         init_weights(model, name=config.train.weight_initializer)

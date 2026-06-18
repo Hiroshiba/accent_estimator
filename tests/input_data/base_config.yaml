@@ -32,7 +32,6 @@ network:
   sampling_rate: 16000
   frame_rate: 50
   vowel_embedding_size: 4
-  frame_reduction_factor: 1
   hidden_size: 16
   conformer_block_num: 2
   conformer_dropout_rate: 0.1
