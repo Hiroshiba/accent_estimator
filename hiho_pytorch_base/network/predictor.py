@@ -32,7 +32,9 @@ class Predictor(nn.Module):
         self.ssl_model = ssl_model
         self.sampling_rate = sampling_rate
         self.frame_rate = frame_rate
-        feature_size = ssl_model.num_hidden_layers * ssl_model.hidden_size
+        feature_size = ssl_model.hidden_size
+
+        self.layer_weight = nn.Parameter(torch.zeros(ssl_model.num_hidden_layers))
 
         self.vowel_embedder = nn.Embedding(vowel_size, vowel_embedding_size)
         self.speaker_embedder = nn.Embedding(speaker_size, speaker_embedding_size)
@@ -56,7 +58,9 @@ class Predictor(nn.Module):
         attention_mask = make_non_pad_mask(wave_length).long()  # (B, max(wL))
         hidden_layers = self.ssl_model.extract_hidden_layers(wave, attention_mask)
         feature = torch.stack(hidden_layers, dim=-1)  # (B, max(fL), ?, 12)
-        feature = feature.flatten(start_dim=2)  # (B, max(fL), ?)
+
+        layer_weight = torch.softmax(self.layer_weight, dim=0)  # (12,)
+        feature = (feature * layer_weight).sum(dim=-1)  # (B, max(fL), ?)
 
         fL = min(int(feature.size(1)), int(mora_index.size(1)))
         feature = feature[:, :fL, :]
