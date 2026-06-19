@@ -76,6 +76,7 @@ class Model(nn.Module):
             phoneme_index=batch.phoneme_index,
             phoneme_id=batch.phoneme_id,
             vowel_index=batch.vowel_index,
+            mora_f0=batch.mora_f0,
             speaker_id=batch.speaker_id,
             wave_length=batch.wave_length,
             phoneme_length=batch.phoneme_length,

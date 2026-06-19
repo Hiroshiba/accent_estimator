@@ -19,6 +19,7 @@ class BatchOutput:
     phoneme_index: Tensor  # (B, max(fL))
     phoneme_id: Tensor  # (B, max(pL))
     vowel_index: Tensor  # (B, max(mL))
+    mora_f0: Tensor  # (B, max(mL))
     accent: Tensor  # (B, max(mL), ?)
     speaker_id: Tensor  # (B,)
     wave_length: Tensor  # (B,)
@@ -40,6 +41,7 @@ class BatchOutput:
         self.vowel_index = to_device(
             self.vowel_index, device, non_blocking=non_blocking
         )
+        self.mora_f0 = to_device(self.mora_f0, device, non_blocking=non_blocking)
         self.accent = to_device(self.accent, device, non_blocking=non_blocking)
         self.speaker_id = to_device(self.speaker_id, device, non_blocking=non_blocking)
         self.wave_length = to_device(
@@ -71,6 +73,7 @@ def collate_dataset_output(data_list: list[OutputData]) -> BatchOutput:
         ),
         phoneme_id=pad_sequence([d.phoneme_id for d in data_list], batch_first=True),
         vowel_index=pad_sequence([d.vowel_index for d in data_list], batch_first=True),
+        mora_f0=pad_sequence([d.mora_f0 for d in data_list], batch_first=True),
         accent=pad_sequence([d.accent for d in data_list], batch_first=True),
         speaker_id=collate_stack([d.speaker_id for d in data_list]),
         wave_length=torch.tensor([d.wave.shape[0] for d in data_list]),

@@ -19,6 +19,8 @@ class DataFileConfig(_Model):
 
     wave_pathlist_path: UPathField
     phoneme_list_pathlist_path: UPathField
+    f0_pathlist_path: UPathField
+    volume_pathlist_path: UPathField
     accent_start_pathlist_path: UPathField
     accent_end_pathlist_path: UPathField
     accent_phrase_start_pathlist_path: UPathField

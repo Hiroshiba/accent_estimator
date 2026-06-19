@@ -40,7 +40,8 @@ class Predictor(nn.Module):
         self.phoneme_embedder = nn.Embedding(phoneme_size, phoneme_embedding_size)
 
         self.pre_phoneme = nn.Linear(
-            feature_size + speaker_embedding_size + phoneme_embedding_size, hidden_size
+            feature_size + speaker_embedding_size + phoneme_embedding_size + 1,
+            hidden_size,
         )
         self.encoder = encoder
         self.post = nn.Linear(hidden_size, 4 * 2)
@@ -52,6 +53,7 @@ class Predictor(nn.Module):
         phoneme_index: Tensor,  # (B, max(fL))
         phoneme_id: Tensor,  # (B, max(pL))
         vowel_index: Tensor,  # (B, max(mL))
+        mora_f0: Tensor,  # (B, max(mL))
         speaker_id: Tensor,  # (B,)
         wave_length: Tensor,  # (B,)
         phoneme_length: Tensor,  # (B,)
@@ -93,8 +95,16 @@ class Predictor(nn.Module):
             phoneme_id[:, :max_phoneme_length]
         )  # (B, max(pL), ?)
 
+        phoneme_f0 = self._scatter_mora_to_phoneme(
+            mora_f0=mora_f0,
+            vowel_index=vowel_index,
+            mora_length=mora_length,
+            max_phoneme_length=max_phoneme_length,
+        )  # (B, max(pL), 1)
+
         h = torch.cat(
-            [phoneme_feature, speaker_embed, phoneme_id_embed], dim=2
+            [phoneme_feature, speaker_embed, phoneme_id_embed, phoneme_f0],
+            dim=2,
         )  # (B, max(pL), ?)
         h = self.pre_phoneme(h)  # (B, max(pL), ?)
 
@@ -140,6 +150,23 @@ class Predictor(nn.Module):
             include_self=False,
         )
         return x[:, :max_phoneme_length]
+
+    def _scatter_mora_to_phoneme(
+        self,
+        mora_f0: Tensor,  # (B, max(mL))
+        vowel_index: Tensor,  # (B, max(mL))
+        mora_length: Tensor,  # (B,)
+        max_phoneme_length: int,
+    ) -> Tensor:  # (B, max(pL), 1)
+        """モーラ単位のf0を母音位置に配置し、子音位置は0埋めの音素単位f0にする"""
+        batch_size = mora_f0.size(0)
+        mora_mask = make_non_pad_mask(mora_length).to(mora_f0.device)  # (B, max(mL))
+        masked_index = torch.where(
+            mora_mask, vowel_index, torch.full_like(vowel_index, max_phoneme_length)
+        )  # (B, max(mL))
+        phoneme_f0 = mora_f0.new_zeros(batch_size, max_phoneme_length + 1)
+        phoneme_f0 = phoneme_f0.scatter(1, masked_index, mora_f0)
+        return phoneme_f0[:, :max_phoneme_length].unsqueeze(-1)
 
     def _select_vowel(
         self,

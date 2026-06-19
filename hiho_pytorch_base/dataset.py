@@ -35,6 +35,8 @@ class LazyInputData:
 
     wave_path: UPath
     phoneme_list_path: UPath
+    f0_path: UPath
+    volume_path: UPath
     accent_start_path: UPath
     accent_end_path: UPath
     accent_phrase_start_path: UPath
@@ -47,6 +49,8 @@ class LazyInputData:
             [
                 str(self.wave_path),
                 str(self.phoneme_list_path),
+                str(self.f0_path),
+                str(self.volume_path),
                 str(self.accent_start_path),
                 str(self.accent_end_path),
                 str(self.accent_phrase_start_path),
@@ -66,6 +70,8 @@ class LazyInputData:
         return {
             "wave_path": str(self.wave_path),
             "phoneme_list_path": str(self.phoneme_list_path),
+            "f0_path": str(self.f0_path),
+            "volume_path": str(self.volume_path),
             "accent_start_path": str(self.accent_start_path),
             "accent_end_path": str(self.accent_end_path),
             "accent_phrase_start_path": str(self.accent_phrase_start_path),
@@ -86,6 +92,8 @@ class LazyInputData:
                 f"{p.start:.4f}\t{p.end:.4f}\t{p.phoneme}" for p in d.phoneme_list
             )
             f.create_dataset("phoneme_text", data=phoneme_text)
+            f.create_dataset("f0", data=d.f0)
+            f.create_dataset("volume", data=d.volume)
             f.create_dataset("accent_start", data=numpy.asarray(d.accent_start))
             f.create_dataset("accent_end", data=numpy.asarray(d.accent_end))
             f.create_dataset(
@@ -112,6 +120,8 @@ class LazyInputData:
                 wave=numpy.array(f["wave"]),
                 sampling_rate=int(f.attrs["sampling_rate"]),  # type: ignore
                 phoneme_list=phoneme_list,
+                f0=numpy.array(f["f0"]),
+                volume=numpy.array(f["volume"]),
                 accent_start=numpy.array(f["accent_start"]).astype(bool).tolist(),
                 accent_end=numpy.array(f["accent_end"]).astype(bool).tolist(),
                 accent_phrase_start=(
@@ -134,6 +144,8 @@ class LazyInputData:
             phoneme_list=OjtPhoneme.loads_julius_list(
                 to_local_path(self.phoneme_list_path).read_text()
             ),
+            f0=numpy.load(to_local_path(self.f0_path)),
+            volume=numpy.load(to_local_path(self.volume_path)),
             accent_start=_read_bool_list(to_local_path(self.accent_start_path)),
             accent_end=_read_bool_list(to_local_path(self.accent_end_path)),
             accent_phrase_start=_read_bool_list(
@@ -275,6 +287,8 @@ def get_datas(
         (
             wave_pathmappings,
             phoneme_list_pathmappings,
+            f0_pathmappings,
+            volume_pathmappings,
             accent_start_pathmappings,
             accent_end_pathmappings,
             accent_phrase_start_pathmappings,
@@ -285,6 +299,8 @@ def get_datas(
         [
             config.wave_pathlist_path,
             config.phoneme_list_pathlist_path,
+            config.f0_pathlist_path,
+            config.volume_pathlist_path,
             config.accent_start_pathlist_path,
             config.accent_end_pathlist_path,
             config.accent_phrase_start_pathlist_path,
@@ -305,6 +321,8 @@ def get_datas(
         LazyInputData(
             wave_path=wave_pathmappings[fn],
             phoneme_list_path=phoneme_list_pathmappings[fn],
+            f0_path=f0_pathmappings[fn],
+            volume_path=volume_pathmappings[fn],
             accent_start_path=accent_start_pathmappings[fn],
             accent_end_path=accent_end_pathmappings[fn],
             accent_phrase_start_path=accent_phrase_start_pathmappings[fn],

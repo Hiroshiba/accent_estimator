@@ -109,6 +109,24 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
 
     _setup_data(generate_phoneme_list, "phoneme_list", "lab")
 
+    # フレーム基本周波数
+    def generate_f0(file_path: Path) -> None:
+        phonemes = phoneme_lists[file_path.stem]
+        num_frames = int(round(phonemes[-1].end * _FRAME_RATE))
+        f0 = np.random.default_rng().uniform(100.0, 300.0, size=num_frames)
+        np.save(file_path, f0.astype(np.float32))
+
+    _setup_data(generate_f0, "f0", "npy")
+
+    # フレーム音量
+    def generate_volume(file_path: Path) -> None:
+        phonemes = phoneme_lists[file_path.stem]
+        num_frames = int(round(phonemes[-1].end * _FRAME_RATE))
+        volume = np.random.default_rng().uniform(0.0, 1.0, size=num_frames)
+        np.save(file_path, volume.astype(np.float32))
+
+    _setup_data(generate_volume, "volume", "npy")
+
     # アクセント核開始
     def generate_accent_start(file_path: Path) -> None:
         phonemes = phoneme_lists[file_path.stem]
