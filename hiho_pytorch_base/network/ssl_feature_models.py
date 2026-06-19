@@ -4,7 +4,7 @@ import sys
 import types
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -751,11 +751,11 @@ def _install_fairseq_dictionary_stub() -> None:
             raise ValueError("fairseq.data.dictionary.Dictionary が見つかりません")
         return
 
-    fairseq_module = sys.modules.get("fairseq", types.ModuleType("fairseq"))
-    fairseq_data_module = sys.modules.get(
+    fairseq_module: Any = sys.modules.get("fairseq", types.ModuleType("fairseq"))
+    fairseq_data_module: Any = sys.modules.get(
         "fairseq.data", types.ModuleType("fairseq.data")
     )
-    fairseq_dictionary_module = types.ModuleType("fairseq.data.dictionary")
+    fairseq_dictionary_module: Any = types.ModuleType("fairseq.data.dictionary")
     fairseq_dictionary_module.Dictionary = _FairseqDictionary
     fairseq_module.data = fairseq_data_module
     fairseq_data_module.dictionary = fairseq_dictionary_module

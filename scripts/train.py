@@ -23,7 +23,7 @@ from hiho_pytorch_base.evaluator import (
 )
 from hiho_pytorch_base.generator import Generator
 from hiho_pytorch_base.model import Model, ModelOutput
-from hiho_pytorch_base.network.predictor import create_predictor
+from hiho_pytorch_base.network.predictor import Predictor, create_predictor
 from hiho_pytorch_base.utility.pytorch_utility import (
     init_weights,
     make_optimizer,
