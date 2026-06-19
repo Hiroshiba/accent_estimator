@@ -49,12 +49,12 @@ class NetworkConfig(_Model):
     ssl_model_path: UPathField
     sampling_rate: int
     frame_rate: float
-    vowel_embedding_size: int
     hidden_size: int
     conformer_block_num: int
     conformer_dropout_rate: float
     speaker_size: int
     speaker_embedding_size: int
+    phoneme_embedding_size: int
 
 
 class ModelConfig(_Model):

@@ -84,11 +84,13 @@ def generate(
     for batch in tqdm(data_loader, desc="generate"):
         batch.to_device(device="cuda" if use_gpu else "cpu", non_blocking=True)
         _ = generator(
-            vowel=batch.vowel,
             wave=batch.wave,
-            mora_index=batch.mora_index,
+            phoneme_index=batch.phoneme_index,
+            phoneme_id=batch.phoneme_id,
+            vowel_index=batch.vowel_index,
             speaker_id=batch.speaker_id,
             wave_length=batch.wave_length,
+            phoneme_length=batch.phoneme_length,
             mora_length=batch.mora_length,
         )
 

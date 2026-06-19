@@ -9,8 +9,6 @@ from torch import Tensor
 from .phoneme import BasePhoneme
 from .wave import Wave
 
-vowels = ("pau", "a", "i", "u", "e", "o", "n", "cl")
-
 mora_phoneme_list = (
     "a",
     "i",
@@ -45,9 +43,10 @@ class InputData:
 class OutputData:
     """データ処理後のデータ構造"""
 
-    vowel: Tensor
     wave: Tensor
-    mora_index: Tensor
+    phoneme_index: Tensor
+    phoneme_id: Tensor
+    vowel_index: Tensor
     accent: Tensor
     speaker_id: Tensor
 
@@ -78,30 +77,25 @@ def preprocess(
         [accent_start, accent_end, accent_phrase_start, accent_phrase_end], axis=1
     )
 
-    vowel = numpy.array([vowel_to_id(d.phoneme_list[i].phoneme) for i in mora_indexes])
+    vowel_index = numpy.array(mora_indexes)
 
-    mora_split_second_list = [float(d.phoneme_list[i].end) for i in mora_indexes]
-    mora_index = _make_index_array(
-        split_second_list=mora_split_second_list,
+    phoneme_split_second_list = [float(p.end) for p in d.phoneme_list]
+    phoneme_index = _make_index_array(
+        split_second_list=phoneme_split_second_list,
         rate=frame_rate,
         length=frame_length,
     )
 
+    phoneme_id = numpy.array([p.phoneme_id for p in d.phoneme_list], dtype=numpy.int64)
+
     return OutputData(
-        vowel=torch.from_numpy(vowel).long(),
         wave=torch.from_numpy(numpy.asarray(resampled, dtype=numpy.float32)),
-        mora_index=torch.from_numpy(mora_index).long(),
+        phoneme_index=torch.from_numpy(phoneme_index).long(),
+        phoneme_id=torch.from_numpy(phoneme_id).long(),
+        vowel_index=torch.from_numpy(vowel_index).long(),
         accent=torch.from_numpy(accent).long(),
         speaker_id=torch.tensor(d.speaker_id).long(),
     )
-
-
-def vowel_to_id(vowel: str) -> int:
-    """母音文字列を母音 ID に変換"""
-    if vowel == "sil":
-        vowel = "pau"
-    vowel = vowel.lower()
-    return vowels.index(vowel)
 
 
 def _make_index_array(

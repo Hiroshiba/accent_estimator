@@ -31,12 +31,12 @@ network:
   ssl_model_path: "not/exist/path"
   sampling_rate: 16000
   frame_rate: 50
-  vowel_embedding_size: 4
   hidden_size: 16
   conformer_block_num: 2
   conformer_dropout_rate: 0.1
   speaker_size: 3
   speaker_embedding_size: 4
+  phoneme_embedding_size: 4
 
 model: {}
 

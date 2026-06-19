@@ -21,7 +21,7 @@ from upath import UPath
 
 from hiho_pytorch_base.batch import collate_dataset_output
 from hiho_pytorch_base.config import Config
-from hiho_pytorch_base.data.data import OutputData, mora_phoneme_list, vowels
+from hiho_pytorch_base.data.data import OutputData, mora_phoneme_list
 from hiho_pytorch_base.dataset import (
     DatasetCollection,
     DatasetType,
@@ -44,7 +44,7 @@ class DataInfo:
     """データ情報"""
 
     consonant: list[str]
-    vowel: np.ndarray
+    vowel: list[str]
     accent: np.ndarray
     speaker_id: int
     details: str
@@ -114,11 +114,13 @@ class VisualizationApp:
         """OutputDataから推論結果を生成"""
         batch = collate_dataset_output([output_data])
         return generator(
-            vowel=batch.vowel,
             wave=batch.wave,
-            mora_index=batch.mora_index,
+            phoneme_index=batch.phoneme_index,
+            phoneme_id=batch.phoneme_id,
+            vowel_index=batch.vowel_index,
             speaker_id=batch.speaker_id,
             wave_length=batch.wave_length,
+            phoneme_length=batch.phoneme_length,
             mora_length=batch.mora_length,
         )
 
@@ -156,9 +158,9 @@ class VisualizationApp:
 パス: {lazy_data.wave_path}
 shape: {tuple(output_data.wave.shape)}
 
-母音列
+母音位置列
 パス: {lazy_data.phoneme_list_path}
-shape: {tuple(output_data.vowel.shape)}
+shape: {tuple(output_data.vowel_index.shape)}
 
 アクセント核開始
 パス: {lazy_data.accent_start_path}
@@ -245,19 +247,23 @@ shape: {tuple(output_data.accent.shape)}
 
         return (feature_plot, accent_plot)
 
-    def _extract_consonant(self, lazy_data: LazyInputData) -> list[str]:
-        """各モーラの子音を音素列から取得し、子音がなければ空文字にする"""
+    def _extract_mora_phoneme(
+        self, lazy_data: LazyInputData
+    ) -> tuple[list[str], list[str]]:
+        """各モーラの子音と母音を音素列から取得し、子音がなければ空文字にする"""
         phoneme_list = lazy_data.fetch().phoneme_list
         consonant: list[str] = []
+        vowel: list[str] = []
         for i, p in enumerate(phoneme_list):
             if p.phoneme not in mora_phoneme_list:
                 continue
+            vowel.append(p.phoneme)
             prev = phoneme_list[i - 1].phoneme if i > 0 else None
             if prev is not None and prev not in mora_phoneme_list:
                 consonant.append(prev)
             else:
                 consonant.append("")
-        return consonant
+        return consonant, vowel
 
     def _create_data_info(
         self,
@@ -266,8 +272,7 @@ shape: {tuple(output_data.accent.shape)}
         lazy_data: LazyInputData,
     ) -> DataInfo:
         """データ情報を作成"""
-        consonant = self._extract_consonant(lazy_data)
-        vowel = output_data.vowel.cpu().numpy()
+        consonant, vowel = self._extract_mora_phoneme(lazy_data)
         accent = output_data.accent.cpu().numpy()
         speaker_id = int(output_data.speaker_id.item())
         details = self._create_details_text(config_path, output_data, lazy_data)
@@ -381,10 +386,9 @@ shape: {tuple(output_data.accent.shape)}
                 with gr.Row():
                     with gr.Column():
                         gr.Markdown("### モーラ列")
-                        vowel_str = [vowels[i] for i in data_info.vowel]
                         mora_table = {"": ["子音", "母音"]}
                         for i, (c, v) in enumerate(
-                            zip(data_info.consonant, vowel_str, strict=True)
+                            zip(data_info.consonant, data_info.vowel, strict=True)
                         ):
                             mora_table[str(i)] = [c, v]
                         gr.DataFrame(

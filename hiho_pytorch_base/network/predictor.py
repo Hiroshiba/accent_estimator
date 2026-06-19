@@ -6,7 +6,7 @@ import torch
 from torch import Tensor, nn
 
 from ..config import NetworkConfig
-from ..data.data import vowels
+from ..data.phoneme import OjtPhoneme
 from .conformer.encoder import Encoder
 from .ssl_feature_models import HubertModel, create_base_hubert_config, load_ssl_model
 from .transformer.utility import make_non_pad_mask
@@ -20,10 +20,10 @@ class Predictor(nn.Module):
         ssl_model: HubertModel,
         sampling_rate: int,
         frame_rate: float,
-        vowel_size: int,
-        vowel_embedding_size: int,
         speaker_size: int,
         speaker_embedding_size: int,
+        phoneme_size: int,
+        phoneme_embedding_size: int,
         hidden_size: int,
         encoder: Encoder,
     ):
@@ -36,11 +36,11 @@ class Predictor(nn.Module):
 
         self.layer_weight = nn.Parameter(torch.zeros(ssl_model.num_hidden_layers))
 
-        self.vowel_embedder = nn.Embedding(vowel_size, vowel_embedding_size)
         self.speaker_embedder = nn.Embedding(speaker_size, speaker_embedding_size)
+        self.phoneme_embedder = nn.Embedding(phoneme_size, phoneme_embedding_size)
 
-        self.pre_mora = nn.Linear(
-            feature_size + vowel_embedding_size + speaker_embedding_size, hidden_size
+        self.pre_phoneme = nn.Linear(
+            feature_size + speaker_embedding_size + phoneme_embedding_size, hidden_size
         )
         self.encoder = encoder
         self.post = nn.Linear(hidden_size, 4 * 2)
@@ -48,11 +48,13 @@ class Predictor(nn.Module):
     def forward(  # noqa: D102
         self,
         *,
-        vowel: Tensor,  # (B, max(mL))
         wave: Tensor,  # (B, max(wL))
-        mora_index: Tensor,  # (B, max(fL))
+        phoneme_index: Tensor,  # (B, max(fL))
+        phoneme_id: Tensor,  # (B, max(pL))
+        vowel_index: Tensor,  # (B, max(mL))
         speaker_id: Tensor,  # (B,)
         wave_length: Tensor,  # (B,)
+        phoneme_length: Tensor,  # (B,)
         mora_length: Tensor,  # (B,)
     ) -> Tensor:  # (B, max(mL), 2, 4)
         attention_mask = make_non_pad_mask(wave_length).long()  # (B, max(wL))
@@ -62,9 +64,9 @@ class Predictor(nn.Module):
         layer_weight = torch.softmax(self.layer_weight, dim=0)  # (12,)
         feature = (feature * layer_weight).sum(dim=-1)  # (B, max(fL), ?)
 
-        fL = min(int(feature.size(1)), int(mora_index.size(1)))
+        fL = min(int(feature.size(1)), int(phoneme_index.size(1)))
         feature = feature[:, :fL, :]
-        mora_index = mora_index[:, :fL]
+        phoneme_index = phoneme_index[:, :fL]
 
         # NOTE: HuBERTの出力長は75%が1フレーム短いので微調整
         # FIXME: 本当はより正確に計算すべき
@@ -73,54 +75,63 @@ class Predictor(nn.Module):
         ).long()  # (B,)
         frame_length = torch.clamp(frame_length, max=fL)
 
-        mora_feature = self._aggregate_to_mora(
+        phoneme_feature = self._aggregate_to_phoneme(
             feature=feature,
             frame_length=frame_length,
-            mora_index=mora_index,
-            mora_length=mora_length,
-        )  # (B, max(mL), ?)
+            phoneme_index=phoneme_index,
+            phoneme_length=phoneme_length,
+        )  # (B, max(pL), ?)
 
-        max_mora_length = mora_feature.size(1)
-        vowel_embed = self.vowel_embedder(vowel[:, :max_mora_length])  # (B, max(mL), ?)
+        max_phoneme_length = phoneme_feature.size(1)
         speaker_embed = (
             self.speaker_embedder(speaker_id)
             .unsqueeze(1)
-            .expand(-1, max_mora_length, -1)
-        )  # (B, max(mL), ?)
+            .expand(-1, max_phoneme_length, -1)
+        )  # (B, max(pL), ?)
+
+        phoneme_id_embed = self.phoneme_embedder(
+            phoneme_id[:, :max_phoneme_length]
+        )  # (B, max(pL), ?)
 
         h = torch.cat(
-            [mora_feature, vowel_embed, speaker_embed], dim=2
+            [phoneme_feature, speaker_embed, phoneme_id_embed], dim=2
+        )  # (B, max(pL), ?)
+        h = self.pre_phoneme(h)  # (B, max(pL), ?)
+
+        phoneme_mask = (
+            make_non_pad_mask(phoneme_length).unsqueeze(-2).to(h.device)
+        )  # (B, 1, max(pL))
+        h, _ = self.encoder(x=h, cond=None, mask=phoneme_mask)  # (B, max(pL), ?)
+
+        mora_h = self._select_vowel(
+            phoneme_h=h, vowel_index=vowel_index, mora_length=mora_length
         )  # (B, max(mL), ?)
-        h = self.pre_mora(h)  # (B, max(mL), ?)
 
-        mora_mask = (
-            make_non_pad_mask(mora_length).unsqueeze(-2).to(h.device)
-        )  # (B, 1, max(mL))
-        h, _ = self.encoder(x=h, cond=None, mask=mora_mask)  # (B, max(mL), ?)
-
-        output = self.post(h)  # (B, max(mL), 4*2)
+        output = self.post(mora_h)  # (B, max(mL), 4*2)
         return output.reshape(output.size(0), output.size(1), 2, 4)
 
-    def _aggregate_to_mora(
+    def _aggregate_to_phoneme(
         self,
         feature: Tensor,  # (B, max(fL), ?)
         frame_length: Tensor,  # (B,)
-        mora_index: Tensor,  # (B, max(fL))
-        mora_length: Tensor,  # (B,)
-    ) -> Tensor:  # (B, max(mL), ?)
-        """フレーム特徴をモーラごとに平均集約する"""
+        phoneme_index: Tensor,  # (B, max(fL))
+        phoneme_length: Tensor,  # (B,)
+    ) -> Tensor:  # (B, max(pL), ?)
+        """フレーム特徴を音素ごとに平均集約する"""
         batch_size, _, num_feature = feature.shape
-        max_mora_length = int(mora_length.max().item())
+        max_phoneme_length = int(phoneme_length.max().item())
         device = feature.device
 
         frame_mask = make_non_pad_mask(frame_length).to(device)  # (B, max(fL))
         masked_index = torch.where(
-            frame_mask, mora_index, torch.full_like(mora_index, max_mora_length)
+            frame_mask,
+            phoneme_index,
+            torch.full_like(phoneme_index, max_phoneme_length),
         )  # (B, max(fL))
 
         x = feature.new_zeros(
-            batch_size, max_mora_length + 1, num_feature
-        )  # (B, max(mL)+1, ?)
+            batch_size, max_phoneme_length + 1, num_feature
+        )  # (B, max(pL)+1, ?)
         x = x.scatter_reduce(
             1,
             masked_index.unsqueeze(-1).expand(-1, -1, num_feature),
@@ -128,7 +139,20 @@ class Predictor(nn.Module):
             reduce="mean",
             include_self=False,
         )
-        return x[:, :max_mora_length]
+        return x[:, :max_phoneme_length]
+
+    def _select_vowel(
+        self,
+        phoneme_h: Tensor,  # (B, max(pL), ?)
+        vowel_index: Tensor,  # (B, max(mL))
+        mora_length: Tensor,  # (B,)
+    ) -> Tensor:  # (B, max(mL), ?)
+        """音素単位の特徴から母音位置のモーラ特徴を取り出す"""
+        max_mora_length = int(mora_length.max().item())
+        vowel_index = vowel_index[:, :max_mora_length]  # (B, max(mL))
+        num_feature = phoneme_h.size(2)
+        index = vowel_index.unsqueeze(-1).expand(-1, -1, num_feature)  # (B, max(mL), ?)
+        return torch.gather(phoneme_h, 1, index)
 
 
 def create_predictor(config: NetworkConfig) -> Predictor:
@@ -163,10 +187,10 @@ def create_predictor(config: NetworkConfig) -> Predictor:
         ssl_model=ssl_model,
         sampling_rate=config.sampling_rate,
         frame_rate=config.frame_rate,
-        vowel_size=len(vowels),
-        vowel_embedding_size=config.vowel_embedding_size,
         speaker_size=config.speaker_size,
         speaker_embedding_size=config.speaker_embedding_size,
+        phoneme_size=OjtPhoneme.num_phoneme,
+        phoneme_embedding_size=config.phoneme_embedding_size,
         hidden_size=config.hidden_size,
         encoder=encoder,
     )

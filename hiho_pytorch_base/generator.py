@@ -58,21 +58,25 @@ class Generator(nn.Module):
     def forward(
         self,
         *,
-        vowel: TensorLike,  # (B, max(mL))
         wave: TensorLike,  # (B, max(wL))
-        mora_index: TensorLike,  # (B, max(fL))
+        phoneme_index: TensorLike,  # (B, max(fL))
+        phoneme_id: TensorLike,  # (B, max(pL))
+        vowel_index: TensorLike,  # (B, max(mL))
         speaker_id: TensorLike,  # (B,)
         wave_length: TensorLike,  # (B,)
+        phoneme_length: TensorLike,  # (B,)
         mora_length: TensorLike,  # (B,)
     ) -> GeneratorOutput:
         """生成経路で推論する"""
         mora_length_tensor = to_tensor(mora_length, self.device)
         accent_logit = self.predictor(  # (B, max(mL), 2, 4)
-            vowel=to_tensor(vowel, self.device),
             wave=to_tensor(wave, self.device),
-            mora_index=to_tensor(mora_index, self.device),
+            phoneme_index=to_tensor(phoneme_index, self.device),
+            phoneme_id=to_tensor(phoneme_id, self.device),
+            vowel_index=to_tensor(vowel_index, self.device),
             speaker_id=to_tensor(speaker_id, self.device),
             wave_length=to_tensor(wave_length, self.device),
+            phoneme_length=to_tensor(phoneme_length, self.device),
             mora_length=mora_length_tensor,
         )
         return GeneratorOutput(

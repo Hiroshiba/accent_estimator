@@ -60,11 +60,13 @@ class Evaluator(nn.Module):
     def forward(self, batch: BatchOutput) -> EvaluatorOutput:
         """データをネットワークに入力して評価値を計算する"""
         output_result: GeneratorOutput = self.generator(
-            vowel=batch.vowel,
             wave=batch.wave,
-            mora_index=batch.mora_index,
+            phoneme_index=batch.phoneme_index,
+            phoneme_id=batch.phoneme_id,
+            vowel_index=batch.vowel_index,
             speaker_id=batch.speaker_id,
             wave_length=batch.wave_length,
+            phoneme_length=batch.phoneme_length,
             mora_length=batch.mora_length,
         )
 

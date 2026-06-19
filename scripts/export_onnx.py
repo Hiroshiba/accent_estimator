@@ -23,19 +23,23 @@ class PredictorWrapper(nn.Module):
 
     def forward(  # noqa: D102
         self,
-        vowel: Tensor,  # (B, max(mL))
         wave: Tensor,  # (B, max(wL))
-        mora_index: Tensor,  # (B, max(fL))
+        phoneme_index: Tensor,  # (B, max(fL))
+        phoneme_id: Tensor,  # (B, max(pL))
+        vowel_index: Tensor,  # (B, max(mL))
         speaker_id: Tensor,  # (B,)
         wave_length: Tensor,  # (B,)
+        phoneme_length: Tensor,  # (B,)
         mora_length: Tensor,  # (B,)
     ) -> Tensor:
         return self.predictor(
-            vowel=vowel,
             wave=wave,
-            mora_index=mora_index,
+            phoneme_index=phoneme_index,
+            phoneme_id=phoneme_id,
+            vowel_index=vowel_index,
             speaker_id=speaker_id,
             wave_length=wave_length,
+            phoneme_length=phoneme_length,
             mora_length=mora_length,
         )
 
@@ -51,43 +55,61 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
     wrapper.eval()
 
     batch_size = 1
+    max_phoneme_length = 20
     max_mora_length = 10
-    max_frame_length = max_mora_length * 5
+    max_frame_length = max_phoneme_length * 5
     wave_length_samples = max_frame_length * 320  # HuBERT stride
 
-    vowel = torch.randint(0, 8, (batch_size, max_mora_length))
     wave = torch.randn(batch_size, wave_length_samples)
     wave_length = torch.tensor([wave_length_samples] * batch_size)
-    mora_index = (
+    phoneme_index = (
         torch.repeat_interleave(
-            torch.arange(max_mora_length),
-            repeats=max_frame_length // max_mora_length,
+            torch.arange(max_phoneme_length),
+            repeats=max_frame_length // max_phoneme_length,
         )[:max_frame_length]
         .unsqueeze(0)
         .expand(batch_size, -1)
     )
+    phoneme_id = torch.zeros(batch_size, max_phoneme_length, dtype=torch.long)
+    vowel_index = (
+        torch.arange(1, max_mora_length * 2, 2).unsqueeze(0).expand(batch_size, -1)
+    )
     speaker_id = torch.randint(0, config.network.speaker_size, (batch_size,))
+    phoneme_length = torch.tensor([max_phoneme_length] * batch_size)
     mora_length = torch.tensor([max_mora_length] * batch_size)
 
     torch.onnx.export(
         wrapper,
-        (vowel, wave, mora_index, speaker_id, wave_length, mora_length),
+        (
+            wave,
+            phoneme_index,
+            phoneme_id,
+            vowel_index,
+            speaker_id,
+            wave_length,
+            phoneme_length,
+            mora_length,
+        ),
         str(output_path),
         input_names=[
-            "vowel",
             "wave",
-            "mora_index",
+            "phoneme_index",
+            "phoneme_id",
+            "vowel_index",
             "speaker_id",
             "wave_length",
+            "phoneme_length",
             "mora_length",
         ],
         output_names=["accent_logit"],
         dynamic_axes={
-            "vowel": {0: "batch_size", 1: "max_mora_length"},
             "wave": {0: "batch_size", 1: "max_wave_length"},
-            "mora_index": {0: "batch_size", 1: "max_frame_length"},
+            "phoneme_index": {0: "batch_size", 1: "max_frame_length"},
+            "phoneme_id": {0: "batch_size", 1: "max_phoneme_length"},
+            "vowel_index": {0: "batch_size", 1: "max_mora_length"},
             "speaker_id": {0: "batch_size"},
             "wave_length": {0: "batch_size"},
+            "phoneme_length": {0: "batch_size"},
             "mora_length": {0: "batch_size"},
             "accent_logit": {0: "batch_size", 1: "max_mora_length"},
         },

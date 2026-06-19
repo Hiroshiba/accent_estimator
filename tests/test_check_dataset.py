@@ -24,9 +24,7 @@ def test_check_dataset_with_missing_data_files(
     config_path = tmp_path / "missing_data_config.yaml"
 
     config_dict = train_config.to_dict()
-    config_dict["dataset"]["train"]["wave_pathlist_path"] = (
-        "non_existent_pathlist.txt"
-    )
+    config_dict["dataset"]["train"]["wave_pathlist_path"] = "non_existent_pathlist.txt"
 
     Config.from_dict(config_dict).save(UPath(config_path))
 

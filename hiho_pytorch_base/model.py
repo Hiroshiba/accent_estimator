@@ -72,11 +72,13 @@ class Model(nn.Module):
     def forward(self, batch: BatchOutput) -> ModelOutput:
         """データをネットワークに入力して損失などを計算する"""
         output = self.predictor(
-            vowel=batch.vowel,
             wave=batch.wave,
-            mora_index=batch.mora_index,
+            phoneme_index=batch.phoneme_index,
+            phoneme_id=batch.phoneme_id,
+            vowel_index=batch.vowel_index,
             speaker_id=batch.speaker_id,
             wave_length=batch.wave_length,
+            phoneme_length=batch.phoneme_length,
             mora_length=batch.mora_length,
         )  # (B, max(mL), 2, 4)
 
