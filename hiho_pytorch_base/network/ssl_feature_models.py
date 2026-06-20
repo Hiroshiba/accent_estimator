@@ -560,6 +560,16 @@ class HubertModel(nn.Module):
         self.feature_projection = HubertFeatureProjection(config)
         self.encoder = HubertEncoder(config)
 
+    def freeze(self) -> None:
+        """パラメータを固定し dropout と layerdrop を無効化する。jit.script対応版。"""
+        self.requires_grad_(False)
+        self.encoder.layerdrop = 0.0
+        for module in self.modules():
+            if isinstance(module, nn.Dropout):
+                module.p = 0.0
+            if isinstance(module, HubertAttention):
+                module.dropout = 0.0
+
     def extract_hidden_layers(
         self,
         input_values: Tensor,

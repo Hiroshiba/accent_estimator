@@ -60,7 +60,8 @@ class Predictor(nn.Module):
         mora_length: Tensor,  # (B,)
     ) -> Tensor:  # (B, max(mL), 2, 4)
         attention_mask = make_non_pad_mask(wave_length).long()  # (B, max(wL))
-        hidden_layers = self.ssl_model.extract_hidden_layers(wave, attention_mask)
+        with torch.no_grad():
+            hidden_layers = self.ssl_model.extract_hidden_layers(wave, attention_mask)
         feature = torch.stack(hidden_layers, dim=-1)  # (B, max(fL), ?, 12)
 
         layer_weight = torch.softmax(self.layer_weight, dim=0)  # (12,)
@@ -195,6 +196,7 @@ def create_predictor(config: NetworkConfig) -> Predictor:
         model_path=config.ssl_model_path,
         device=torch.device("cpu"),
     )
+    ssl_model.freeze()
 
     encoder = Encoder(
         hidden_size=config.hidden_size,
