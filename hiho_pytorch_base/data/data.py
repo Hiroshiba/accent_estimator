@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 from .phoneme import BasePhoneme
+from .sampling_data import SamplingData
 from .wave import Wave
 
 mora_phoneme_list = (
@@ -38,8 +39,8 @@ class InputData:
     wave: numpy.ndarray
     sampling_rate: int
     phoneme_list: list[BasePhoneme]
-    f0: numpy.ndarray
-    volume: numpy.ndarray
+    f0: SamplingData
+    volume: SamplingData
     accent_start: list[bool]
     accent_end: list[bool]
     accent_phrase_start: list[bool]
@@ -114,9 +115,11 @@ def preprocess(
 
     phoneme_id = numpy.array([p.phoneme_id for p in d.phoneme_list], dtype=numpy.int64)
 
+    f0 = d.f0.resample(frame_rate)[:, 0]
+    volume = d.volume.resample(frame_rate)[:, 0]
     mora_f0 = _make_mora_f0(
-        f0=d.f0,
-        volume=d.volume,
+        f0=f0,
+        volume=volume,
         phoneme_list=d.phoneme_list,
         mora_indexes=mora_indexes,
         rate=frame_rate,

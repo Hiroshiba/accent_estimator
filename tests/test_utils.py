@@ -10,6 +10,7 @@ from upath import UPath
 
 from hiho_pytorch_base.config import Config
 from hiho_pytorch_base.data.phoneme import OjtPhoneme
+from hiho_pytorch_base.data.sampling_data import SamplingData
 
 _FRAME_RATE = 50
 
@@ -114,7 +115,7 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
         phonemes = phoneme_lists[file_path.stem]
         num_frames = int(round(phonemes[-1].end * _FRAME_RATE))
         f0 = np.random.default_rng().uniform(100.0, 300.0, size=num_frames)
-        np.save(file_path, f0.astype(np.float32))
+        SamplingData(array=f0.astype(np.float32), rate=_FRAME_RATE).save(file_path)
 
     _setup_data(generate_f0, "f0", "npy")
 
@@ -123,7 +124,7 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
         phonemes = phoneme_lists[file_path.stem]
         num_frames = int(round(phonemes[-1].end * _FRAME_RATE))
         volume = np.random.default_rng().uniform(0.0, 1.0, size=num_frames)
-        np.save(file_path, volume.astype(np.float32))
+        SamplingData(array=volume.astype(np.float32), rate=_FRAME_RATE).save(file_path)
 
     _setup_data(generate_volume, "volume", "npy")
 

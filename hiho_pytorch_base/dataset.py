@@ -19,6 +19,7 @@ from upath import UPath
 from .config import DataFileConfig, DatasetConfig
 from .data.data import InputData, OutputData, preprocess
 from .data.phoneme import OjtPhoneme
+from .data.sampling_data import SamplingData
 from .data.wave import Wave
 from .utility.pathlist_utility import get_data_paths
 from .utility.upath_utility import to_local_path
@@ -92,8 +93,10 @@ class LazyInputData:
                 f"{p.start:.4f}\t{p.end:.4f}\t{p.phoneme}" for p in d.phoneme_list
             )
             f.create_dataset("phoneme_text", data=phoneme_text)
-            f.create_dataset("f0", data=d.f0)
-            f.create_dataset("volume", data=d.volume)
+            f.create_dataset("f0_array", data=d.f0.array)
+            f.create_dataset("f0_rate", data=d.f0.rate)
+            f.create_dataset("volume_array", data=d.volume.array)
+            f.create_dataset("volume_rate", data=d.volume.rate)
             f.create_dataset("accent_start", data=numpy.asarray(d.accent_start))
             f.create_dataset("accent_end", data=numpy.asarray(d.accent_end))
             f.create_dataset(
@@ -120,8 +123,14 @@ class LazyInputData:
                 wave=numpy.array(f["wave"]),
                 sampling_rate=int(f.attrs["sampling_rate"]),  # type: ignore
                 phoneme_list=phoneme_list,
-                f0=numpy.array(f["f0"]),
-                volume=numpy.array(f["volume"]),
+                f0=SamplingData(
+                    array=numpy.array(f["f0_array"]),
+                    rate=float(numpy.array(f["f0_rate"])),
+                ),
+                volume=SamplingData(
+                    array=numpy.array(f["volume_array"]),
+                    rate=float(numpy.array(f["volume_rate"])),
+                ),
                 accent_start=numpy.array(f["accent_start"]).astype(bool).tolist(),
                 accent_end=numpy.array(f["accent_end"]).astype(bool).tolist(),
                 accent_phrase_start=(
@@ -144,8 +153,8 @@ class LazyInputData:
             phoneme_list=OjtPhoneme.loads_julius_list(
                 to_local_path(self.phoneme_list_path).read_text()
             ),
-            f0=numpy.load(to_local_path(self.f0_path)),
-            volume=numpy.load(to_local_path(self.volume_path)),
+            f0=SamplingData.load(to_local_path(self.f0_path)),
+            volume=SamplingData.load(to_local_path(self.volume_path)),
             accent_start=_read_bool_list(to_local_path(self.accent_start_path)),
             accent_end=_read_bool_list(to_local_path(self.accent_end_path)),
             accent_phrase_start=_read_bool_list(
