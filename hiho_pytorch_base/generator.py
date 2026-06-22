@@ -63,7 +63,6 @@ class Generator(nn.Module):
         phoneme_id: TensorLike,  # (B, max(pL))
         vowel_index: TensorLike,  # (B, max(mL))
         mora_f0: TensorLike,  # (B, max(mL))
-        speaker_id: TensorLike,  # (B,)
         wave_length: TensorLike,  # (B,)
         phoneme_length: TensorLike,  # (B,)
         mora_length: TensorLike,  # (B,)
@@ -76,7 +75,6 @@ class Generator(nn.Module):
             phoneme_id=to_tensor(phoneme_id, self.device),
             vowel_index=to_tensor(vowel_index, self.device),
             mora_f0=to_tensor(mora_f0, self.device),
-            speaker_id=to_tensor(speaker_id, self.device),
             wave_length=to_tensor(wave_length, self.device),
             phoneme_length=to_tensor(phoneme_length, self.device),
             mora_length=mora_length_tensor,

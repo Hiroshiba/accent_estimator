@@ -20,8 +20,6 @@ class Predictor(nn.Module):
         ssl_model: HubertModel,
         sampling_rate: int,
         frame_rate: float,
-        speaker_size: int,
-        speaker_embedding_size: int,
         phoneme_size: int,
         phoneme_embedding_size: int,
         hidden_size: int,
@@ -36,11 +34,10 @@ class Predictor(nn.Module):
 
         self.layer_weight = nn.Parameter(torch.zeros(ssl_model.num_hidden_layers))
 
-        self.speaker_embedder = nn.Embedding(speaker_size, speaker_embedding_size)
         self.phoneme_embedder = nn.Embedding(phoneme_size, phoneme_embedding_size)
 
         self.pre_phoneme = nn.Linear(
-            feature_size + speaker_embedding_size + phoneme_embedding_size + 1,
+            feature_size + phoneme_embedding_size + 1,
             hidden_size,
         )
         self.encoder = encoder
@@ -54,7 +51,6 @@ class Predictor(nn.Module):
         phoneme_id: Tensor,  # (B, max(pL))
         vowel_index: Tensor,  # (B, max(mL))
         mora_f0: Tensor,  # (B, max(mL))
-        speaker_id: Tensor,  # (B,)
         wave_length: Tensor,  # (B,)
         phoneme_length: Tensor,  # (B,)
         mora_length: Tensor,  # (B,)
@@ -86,12 +82,6 @@ class Predictor(nn.Module):
         )  # (B, max(pL), ?)
 
         max_phoneme_length = phoneme_feature.size(1)
-        speaker_embed = (
-            self.speaker_embedder(speaker_id)
-            .unsqueeze(1)
-            .expand(-1, max_phoneme_length, -1)
-        )  # (B, max(pL), ?)
-
         phoneme_id_embed = self.phoneme_embedder(
             phoneme_id[:, :max_phoneme_length]
         )  # (B, max(pL), ?)
@@ -104,7 +94,7 @@ class Predictor(nn.Module):
         )  # (B, max(pL), 1)
 
         h = torch.cat(
-            [phoneme_feature, speaker_embed, phoneme_id_embed, phoneme_f0],
+            [phoneme_feature, phoneme_id_embed, phoneme_f0],
             dim=2,
         )  # (B, max(pL), ?)
         h = self.pre_phoneme(h)  # (B, max(pL), ?)
@@ -216,8 +206,6 @@ def create_predictor(config: NetworkConfig) -> Predictor:
         ssl_model=ssl_model,
         sampling_rate=config.sampling_rate,
         frame_rate=config.frame_rate,
-        speaker_size=config.speaker_size,
-        speaker_embedding_size=config.speaker_embedding_size,
         phoneme_size=OjtPhoneme.num_phoneme,
         phoneme_embedding_size=config.phoneme_embedding_size,
         hidden_size=config.hidden_size,

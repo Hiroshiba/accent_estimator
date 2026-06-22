@@ -28,7 +28,6 @@ class PredictorWrapper(nn.Module):
         phoneme_id: Tensor,  # (B, max(pL))
         vowel_index: Tensor,  # (B, max(mL))
         mora_f0: Tensor,  # (B, max(mL))
-        speaker_id: Tensor,  # (B,)
         wave_length: Tensor,  # (B,)
         phoneme_length: Tensor,  # (B,)
         mora_length: Tensor,  # (B,)
@@ -39,7 +38,6 @@ class PredictorWrapper(nn.Module):
             phoneme_id=phoneme_id,
             vowel_index=vowel_index,
             mora_f0=mora_f0,
-            speaker_id=speaker_id,
             wave_length=wave_length,
             phoneme_length=phoneme_length,
             mora_length=mora_length,
@@ -77,7 +75,6 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
         torch.arange(1, max_mora_length * 2, 2).unsqueeze(0).expand(batch_size, -1)
     )
     mora_f0 = torch.randn(batch_size, max_mora_length)
-    speaker_id = torch.randint(0, config.network.speaker_size, (batch_size,))
     phoneme_length = torch.tensor([max_phoneme_length] * batch_size)
     mora_length = torch.tensor([max_mora_length] * batch_size)
 
@@ -89,7 +86,6 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
             phoneme_id,
             vowel_index,
             mora_f0,
-            speaker_id,
             wave_length,
             phoneme_length,
             mora_length,
@@ -101,7 +97,6 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
             "phoneme_id",
             "vowel_index",
             "mora_f0",
-            "speaker_id",
             "wave_length",
             "phoneme_length",
             "mora_length",
@@ -113,7 +108,6 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
             "phoneme_id": {0: "batch_size", 1: "max_phoneme_length"},
             "vowel_index": {0: "batch_size", 1: "max_mora_length"},
             "mora_f0": {0: "batch_size", 1: "max_mora_length"},
-            "speaker_id": {0: "batch_size"},
             "wave_length": {0: "batch_size"},
             "phoneme_length": {0: "batch_size"},
             "mora_length": {0: "batch_size"},
