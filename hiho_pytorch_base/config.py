@@ -34,6 +34,7 @@ class DatasetConfig(_Model):
     hdf5_cache_dir: UPathField | None = None
     train_num: int | None = None
     test_num: int
+    valid_num: int | None = None
     eval_for_test: bool
     eval_times_num: int = 1
     seed: int = 0

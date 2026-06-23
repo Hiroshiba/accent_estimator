@@ -295,8 +295,7 @@ def create_dataset(config: DatasetConfig) -> DatasetCollection:
         random.Random(config.seed).shuffle(datas)
 
     tests, trains = datas[: config.test_num], datas[config.test_num :]
-    if config.train_num is not None:
-        trains = trains[: config.train_num]
+    trains = trains[: config.train_num]
 
     def _wrapper(datas: list[LazyInputData], is_eval: bool) -> Dataset:
         if is_eval:
@@ -309,7 +308,7 @@ def create_dataset(config: DatasetConfig) -> DatasetCollection:
         test=_wrapper(tests, is_eval=False),
         eval=(_wrapper(tests, is_eval=True) if config.eval_for_test else None),
         valid=(
-            _wrapper(get_datas(config.valid, config.hdf5_cache_dir), is_eval=True)
+            _wrapper(get_datas(config.valid, config.hdf5_cache_dir)[: config.valid_num], is_eval=True)
             if config.valid is not None
             else None
         ),
