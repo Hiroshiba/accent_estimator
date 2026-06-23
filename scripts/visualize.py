@@ -2,8 +2,7 @@
 機械学習データセットの可視化ツール
 
 設定ファイルからDatasetCollectionを読み込み、データタイプごとにStreamlit UIで表示する。
-各データタイプの表示形式は機械学習タスクに応じてカスタマイズする。
-データタイプに応じた可視化ロジックを_show_line_plotや_create_details_textで調整する。
+各データタイプの表示形式は機械学習タスクに応じて_show_dataset_sectionや_show_inference_sectionをカスタマイズする。
 
 起動方法:
     uv run -m streamlit run scripts/visualize.py -- --config_path <config> --predictor_path <predictor>
@@ -80,13 +79,74 @@ def _show_pred_target_plot(pred_data: np.ndarray, target_data: np.ndarray) -> No
     st.plotly_chart(fig)
 
 
-def _create_details_text(
+def _show_dataset_section(output_data: OutputData) -> None:
+    """データセットの入力データを可視化する"""
+    feature_vector_data = output_data.feature_vector.cpu().numpy().flatten()
+    feature_variable_data = output_data.feature_variable.cpu().numpy().flatten()
+    target_variable_data = output_data.target_variable.cpu().numpy().flatten()
+    target_vector = output_data.target_vector.cpu().numpy()
+    target_scalar = float(output_data.target_scalar.item())
+    speaker_id = int(output_data.speaker_id.item())
+
+    plot_col1, plot_col2 = st.columns(2)
+    with plot_col1:
+        st.markdown("### 固定長特徴ベクトル")
+        _show_line_plot(feature_vector_data, "固定長特徴ベクトル")
+    with plot_col2:
+        st.markdown("### 可変長特徴データ")
+        _show_line_plot(feature_variable_data, "可変長特徴データ")
+
+    data_col1, data_col2 = st.columns(2)
+    with data_col1:
+        st.markdown("### サンプリングデータ")
+        st.dataframe(target_vector.reshape(1, -1))
+    with data_col2:
+        st.markdown("### その他の値")
+        st.markdown(f"**回帰ターゲット**: {target_scalar:.6f}")
+        st.markdown(f"**話者ID**: {speaker_id}")
+
+    st.markdown("### 可変長ターゲット")
+    _show_line_plot(target_variable_data, "可変長ターゲット")
+
+
+def _show_inference_section(
+    generator_output: GeneratorOutput, output_data: OutputData
+) -> None:
+    """推論結果を可視化する"""
+    vector_output = generator_output.vector_output[0].cpu().numpy()
+    variable_output = generator_output.variable_output[0].cpu().numpy()
+    scalar_output = float(generator_output.scalar_output[0].item())
+    target_variable_data = output_data.target_variable.cpu().numpy().flatten()
+    target_scalar = float(output_data.target_scalar.item())
+
+    predicted_class = int(vector_output.argmax())
+    target_class = int(output_data.target_vector.item())
+
+    infer_col1, infer_col2 = st.columns(2)
+    with infer_col1:
+        st.markdown("### 固定長ベクトル出力")
+        st.dataframe(vector_output.reshape(1, -1))
+        st.markdown(
+            f"**クラス比較**: 予測クラス {predicted_class} / 正解クラス {target_class}"
+        )
+    with infer_col2:
+        st.markdown("### スカラー出力")
+        st.markdown(f"**予測 scalar_output**: {scalar_output:.6f}")
+        st.markdown(f"**正解 target_scalar**: {target_scalar:.6f}")
+
+    st.markdown("### 可変長出力")
+    _show_pred_target_plot(variable_output.flatten(), target_variable_data)
+
+
+def _show_details(
     config_path: UPath,
     output_data: OutputData,
     lazy_data: LazyInputData,
-) -> str:
-    """詳細情報テキストを作成する"""
-    return f"""
+) -> None:
+    """詳細情報を表示する"""
+    st.markdown("### 詳細情報")
+    st.code(
+        f"""
 設定ファイル: {config_path}
 
 固定長特徴ベクトル
@@ -110,7 +170,9 @@ shape: {tuple(output_data.target_variable.shape)}
 shape: {tuple(output_data.target_scalar.shape)}
 
 話者ID: {output_data.speaker_id.item()}
-"""
+""",
+        language=None,
+    )
 
 
 def _to_optional_path(path_str: str) -> UPath | None:
@@ -179,32 +241,7 @@ def visualize(
     output_data = dataset[index]
     lazy_data = dataset.datas[index]
 
-    feature_vector_data = output_data.feature_vector.cpu().numpy().flatten()
-    feature_variable_data = output_data.feature_variable.cpu().numpy().flatten()
-    target_variable_data = output_data.target_variable.cpu().numpy().flatten()
-    target_vector = output_data.target_vector.cpu().numpy()
-    target_scalar = float(output_data.target_scalar.item())
-    speaker_id = int(output_data.speaker_id.item())
-
-    plot_col1, plot_col2 = st.columns(2)
-    with plot_col1:
-        st.markdown("### 固定長特徴ベクトル")
-        _show_line_plot(feature_vector_data, "固定長特徴ベクトル")
-    with plot_col2:
-        st.markdown("### 可変長特徴データ")
-        _show_line_plot(feature_variable_data, "可変長特徴データ")
-
-    data_col1, data_col2 = st.columns(2)
-    with data_col1:
-        st.markdown("### サンプリングデータ")
-        st.dataframe(target_vector.reshape(1, -1))
-    with data_col2:
-        st.markdown("### その他の値")
-        st.markdown(f"**回帰ターゲット**: {target_scalar:.6f}")
-        st.markdown(f"**話者ID**: {speaker_id}")
-
-    st.markdown("### 可変長ターゲット")
-    _show_line_plot(target_variable_data, "可変長ターゲット")
+    _show_dataset_section(output_data)
 
     target_predictor_path = _to_optional_path(predictor_path_str)
     if target_predictor_path is not None:
@@ -216,34 +253,10 @@ def visualize(
                 str(target_config_path), str(target_predictor_path)
             )
             generator_output = _run_inference(generator, output_data)
-            vector_output = generator_output.vector_output[0].cpu().numpy()
-            variable_output = generator_output.variable_output[0].cpu().numpy()
-            scalar_output = float(generator_output.scalar_output[0].item())
-
-            predicted_class = int(vector_output.argmax())
-            target_class = int(output_data.target_vector.item())
-
-            infer_col1, infer_col2 = st.columns(2)
-            with infer_col1:
-                st.markdown("### 固定長ベクトル出力")
-                st.dataframe(vector_output.reshape(1, -1))
-                st.markdown(
-                    f"**クラス比較**: 予測クラス {predicted_class} / 正解クラス {target_class}"
-                )
-            with infer_col2:
-                st.markdown("### スカラー出力")
-                st.markdown(f"**予測 scalar_output**: {scalar_output:.6f}")
-                st.markdown(f"**正解 target_scalar**: {target_scalar:.6f}")
-
-            st.markdown("### 可変長出力")
-            _show_pred_target_plot(variable_output.flatten(), target_variable_data)
+            _show_inference_section(generator_output, output_data)
 
     st.markdown("---")
-    st.markdown("### 詳細情報")
-    st.code(
-        _create_details_text(target_config_path, output_data, lazy_data),
-        language=None,
-    )
+    _show_details(target_config_path, output_data, lazy_data)
 
 
 if __name__ == "__main__":
