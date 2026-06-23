@@ -11,6 +11,7 @@
 import argparse
 
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import torch
@@ -29,11 +30,12 @@ from hiho_pytorch_base.generator import Generator, GeneratorOutput
 from hiho_pytorch_base.utility.upath_utility import to_local_path
 
 accent_channel_names = (
-    "アクセント核開始",
-    "アクセント核終了",
     "アクセント句開始",
     "アクセント句終了",
+    "アクセント核開始",
+    "アクセント核終了",
 )
+accent_display_order = [2, 3, 0, 1]
 
 
 @st.cache_resource
@@ -78,11 +80,12 @@ def _show_line_plot(data: np.ndarray, title: str, xaxis_title: str) -> None:
     st.plotly_chart(fig)
 
 
-def _show_accent_heatmap(data: np.ndarray, title: str) -> None:
-    """アクセント4種をモーラ単位のヒートマップで表示する"""
+def _show_accent_heatmap(data: np.ndarray, title: str, mora_labels: list[str]) -> None:
+    """アクセント4種を表示順に並べ替えてモーラ単位のヒートマップで表示する"""
     fig = go.Figure(
         go.Heatmap(
-            z=data.T,
+            z=data[:, accent_display_order].T,
+            x=mora_labels,
             y=list(accent_channel_names),
             zmin=0,
             zmax=1,
@@ -90,6 +93,7 @@ def _show_accent_heatmap(data: np.ndarray, title: str) -> None:
         )
     )
     fig.update_layout(title=title, xaxis_title="Mora")
+    fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig)
 
 
@@ -110,92 +114,74 @@ def _extract_mora_phoneme(lazy_data: LazyInputData) -> tuple[list[str], list[str
     return consonant, vowel
 
 
-def _show_dataset_section(output_data: OutputData, lazy_data: LazyInputData) -> None:
+def _make_mora_labels(consonant: list[str], vowel: list[str]) -> list[str]:
+    """各モーラをインデックス付きの音素ラベルに変換する"""
+    return [
+        f"{i} {c}{v}" for i, (c, v) in enumerate(zip(consonant, vowel, strict=True))
+    ]
+
+
+def _build_mora_table(
+    output_data: OutputData, consonant: list[str], vowel: list[str]
+) -> pd.DataFrame:
+    """モーラごとの子音・母音・アクセント4種を1つの表にまとめる"""
+    accent = output_data.accent.cpu().numpy()  # (mL, 4)
+    assert len(consonant) == accent.shape[0], (
+        f"モーラ数が一致しません: phoneme={len(consonant)}, accent={accent.shape[0]}"
+    )
+    rows = {
+        "子音": consonant,
+        "母音": vowel,
+        "アクセント句開始": [int(v) for v in accent[:, 2]],
+        "アクセント句終了": [int(v) for v in accent[:, 3]],
+        "アクセント核開始": [int(v) for v in accent[:, 0]],
+        "アクセント核終了": [int(v) for v in accent[:, 1]],
+    }
+    df = pd.DataFrame(rows).T
+    df.columns = [str(i) for i in range(len(consonant))]
+    return df
+
+
+def _highlight_accent(value: object) -> str:
+    """アクセントが立っているセルを強調する"""
+    if value == 1:
+        return "background-color: #b3e0b3"
+    return ""
+
+
+def _show_dataset_section(
+    output_data: OutputData,
+    consonant: list[str],
+    vowel: list[str],
+    sampling_rate: int,
+) -> None:
     """データセットの入力データを可視化する"""
-    wave_data = output_data.wave.cpu().numpy()
-    mora_f0_data = output_data.mora_f0.cpu().numpy()
-    accent_data = output_data.accent.cpu().numpy()
-    speaker_id = int(output_data.speaker_id.item())
-    consonant, vowel = _extract_mora_phoneme(lazy_data)
+    st.markdown("### 音声")
+    st.audio(output_data.wave.cpu().numpy(), sample_rate=sampling_rate)
 
-    plot_col1, plot_col2 = st.columns(2)
-    with plot_col1:
-        st.markdown("### 音声波形")
-        _show_line_plot(wave_data, "音声波形", "Sample")
-    with plot_col2:
-        st.markdown("### モーラf0")
-        _show_line_plot(mora_f0_data, "モーラf0", "Mora")
+    st.markdown("### モーラf0")
+    _show_line_plot(output_data.mora_f0.cpu().numpy(), "モーラf0", "Mora")
 
-    st.markdown("### アクセント")
-    _show_accent_heatmap(accent_data, "アクセント")
-
-    mora_col1, mora_col2 = st.columns(2)
-    with mora_col1:
-        st.markdown("### モーラ列")
-        mora_rows = [
-            {"index": i, "子音": c, "母音": v}
-            for i, (c, v) in enumerate(zip(consonant, vowel, strict=True))
-        ]
-        st.dataframe(mora_rows)
-    with mora_col2:
-        st.markdown("### その他の値")
-        st.markdown(f"**話者ID**: {speaker_id}")
+    st.markdown("### モーラ表")
+    table = _build_mora_table(output_data, consonant, vowel)
+    st.dataframe(table.style.map(_highlight_accent))
 
 
-def _show_inference_section(generator_output: GeneratorOutput) -> None:
+def _show_inference_section(
+    generator_output: GeneratorOutput, mora_labels: list[str]
+) -> None:
     """推論結果を可視化する"""
     accent_logit = generator_output.accent_logit[0]  # (max(mL), 2, 4)
     mora_length = int(generator_output.mora_length[0].item())
     accent_prob = (
         torch.softmax(accent_logit[:mora_length], dim=1)[:, 1, :].cpu().numpy()
     )  # (mL, 4)
+    assert len(mora_labels) == mora_length, (
+        f"モーラ数が一致しません: label={len(mora_labels)}, inference={mora_length}"
+    )
 
     st.markdown("### 予測アクセント確率")
-    _show_accent_heatmap(accent_prob, "予測アクセント確率")
-
-
-def _show_details(
-    config_path: UPath,
-    output_data: OutputData,
-    lazy_data: LazyInputData,
-) -> None:
-    """詳細情報を表示する"""
-    st.markdown("### 詳細情報")
-    st.code(
-        f"""
-設定ファイル: {config_path}
-
-音声波形
-パス: {lazy_data.wave_path}
-shape: {tuple(output_data.wave.shape)}
-
-音素列
-パス: {lazy_data.phoneme_list_path}
-
-母音位置列
-shape: {tuple(output_data.vowel_index.shape)}
-
-モーラf0
-shape: {tuple(output_data.mora_f0.shape)}
-
-アクセント核開始
-パス: {lazy_data.accent_start_path}
-
-アクセント核終了
-パス: {lazy_data.accent_end_path}
-
-アクセント句開始
-パス: {lazy_data.accent_phrase_start_path}
-
-アクセント句終了
-パス: {lazy_data.accent_phrase_end_path}
-
-shape: {tuple(output_data.accent.shape)}
-
-話者ID: {output_data.speaker_id.item()}
-""",
-        language=None,
-    )
+    _show_accent_heatmap(accent_prob, "予測アクセント確率", mora_labels)
 
 
 def _to_optional_path(path_str: str) -> UPath | None:
@@ -246,7 +232,7 @@ def visualize(
         st.error(f"設定ファイルが見つかりません: {target_config_path}")
         return
 
-    _, dataset_collection = _load_config_and_dataset(str(target_config_path))
+    config, dataset_collection = _load_config_and_dataset(str(target_config_path))
     dataset = dataset_collection.get(selected_dataset_type)
     if len(dataset) == 0:
         st.error("データセットが空です")
@@ -263,8 +249,10 @@ def visualize(
 
     output_data = dataset[index]
     lazy_data = dataset.datas[index]
+    consonant, vowel = _extract_mora_phoneme(lazy_data)
+    mora_labels = _make_mora_labels(consonant, vowel)
 
-    _show_dataset_section(output_data, lazy_data)
+    _show_dataset_section(output_data, consonant, vowel, config.dataset.sampling_rate)
 
     target_predictor_path = _to_optional_path(predictor_path_str)
     if target_predictor_path is not None:
@@ -276,10 +264,7 @@ def visualize(
                 str(target_config_path), str(target_predictor_path)
             )
             generator_output = _run_inference(generator, output_data)
-            _show_inference_section(generator_output)
-
-    st.markdown("---")
-    _show_details(target_config_path, output_data, lazy_data)
+            _show_inference_section(generator_output, mora_labels)
 
 
 if __name__ == "__main__":
