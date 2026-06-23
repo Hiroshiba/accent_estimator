@@ -6,14 +6,13 @@
 データタイプに応じた可視化ロジックを_show_line_plotや_create_details_textで調整する。
 
 起動方法:
-    uv run streamlit run scripts/visualize.py -- --config_path <config> --predictor_path <predictor>
+    uv run -m streamlit run scripts/visualize.py -- --config_path <config> --predictor_path <predictor>
 """
 
 import argparse
 
-import japanize_matplotlib  # noqa: F401 日本語フォントに必須
-import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
 import streamlit as st
 from upath import UPath
 
@@ -62,28 +61,23 @@ def _run_inference(generator: Generator, output_data: OutputData) -> GeneratorOu
 
 def _show_line_plot(data: np.ndarray, title: str) -> None:
     """1次元データの折れ線グラフを表示する"""
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(range(len(data)), data)
-    ax.set_title(title)
-    ax.set_xlabel("Index")
-    ax.set_ylabel("Value")
-    ax.grid(True)
-    st.pyplot(fig)
-    plt.close(fig)
+    fig = go.Figure()
+    fig.add_scatter(y=data, mode="lines")
+    fig.update_layout(title=title, xaxis_title="Index", yaxis_title="Value")
+    st.plotly_chart(fig)
 
 
 def _show_pred_target_plot(pred_data: np.ndarray, target_data: np.ndarray) -> None:
     """可変長出力の予測と正解の折れ線グラフを表示する"""
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(range(len(pred_data)), pred_data, label="予測")
-    ax.plot(range(len(target_data)), target_data, label="正解")
-    ax.set_title("可変長出力の予測と正解")
-    ax.set_xlabel("Index")
-    ax.set_ylabel("Value")
-    ax.legend()
-    ax.grid(True)
-    st.pyplot(fig)
-    plt.close(fig)
+    fig = go.Figure()
+    fig.add_scatter(y=pred_data, mode="lines", name="予測")
+    fig.add_scatter(y=target_data, mode="lines", name="正解")
+    fig.update_layout(
+        title="可変長出力の予測と正解",
+        xaxis_title="Index",
+        yaxis_title="Value",
+    )
+    st.plotly_chart(fig)
 
 
 def _create_details_text(
@@ -119,17 +113,9 @@ shape: {tuple(output_data.target_scalar.shape)}
 """
 
 
-def _to_config_path(config_path_str: str) -> UPath | None:
-    """テキスト入力をconfigパスへ変換し、空なら指定なしとしてNoneを返す"""
-    stripped = config_path_str.strip()
-    if len(stripped) == 0:
-        return None
-    return UPath(stripped)
-
-
-def _to_predictor_path(predictor_path_str: str) -> UPath | None:
-    """テキスト入力をpredictorパスへ変換し、空なら指定なしとしてNoneを返す"""
-    stripped = predictor_path_str.strip()
+def _to_optional_path(path_str: str) -> UPath | None:
+    """テキスト入力をパスへ変換し、空なら指定なしとしてNoneを返す"""
+    stripped = path_str.strip()
     if len(stripped) == 0:
         return None
     return UPath(stripped)
@@ -167,7 +153,7 @@ def visualize(
         format_func=lambda t: t.value,
     )
 
-    target_config_path = _to_config_path(config_path_str)
+    target_config_path = _to_optional_path(config_path_str)
     if target_config_path is None:
         st.info("設定ファイルパスを指定してください")
         return
@@ -182,16 +168,13 @@ def visualize(
         return
 
     max_index = len(dataset) - 1
-    if max_index > 0:
-        index = st.slider(
-            "サンプルインデックス",
-            min_value=0,
-            max_value=max_index,
-            value=0,
-            step=1,
-        )
-    else:
-        index = 0
+    index = st.slider(
+        "サンプルインデックス",
+        min_value=0,
+        max_value=max_index,
+        value=0,
+        step=1,
+    )
 
     output_data = dataset[index]
     lazy_data = dataset.datas[index]
@@ -223,35 +206,37 @@ def visualize(
     st.markdown("### 可変長ターゲット")
     _show_line_plot(target_variable_data, "可変長ターゲット")
 
-    target_predictor_path = _to_predictor_path(predictor_path_str)
-    if target_predictor_path is not None and not target_predictor_path.exists():
+    target_predictor_path = _to_optional_path(predictor_path_str)
+    if target_predictor_path is not None:
         st.markdown("## 推論結果")
-        st.error(f"モデルファイルが見つかりません: {target_predictor_path}")
-    elif target_predictor_path is not None:
-        generator = _load_generator(str(target_config_path), str(target_predictor_path))
-        generator_output = _run_inference(generator, output_data)
-        vector_output = generator_output.vector_output[0].cpu().numpy()
-        variable_output = generator_output.variable_output[0].cpu().numpy()
-        scalar_output = float(generator_output.scalar_output[0].item())
-
-        predicted_class = int(vector_output.argmax())
-        target_class = int(output_data.target_vector.item())
-
-        st.markdown("## 推論結果")
-        infer_col1, infer_col2 = st.columns(2)
-        with infer_col1:
-            st.markdown("### 固定長ベクトル出力")
-            st.dataframe(vector_output.reshape(1, -1))
-            st.markdown(
-                f"**クラス比較**: 予測クラス {predicted_class} / 正解クラス {target_class}"
+        if not target_predictor_path.exists():
+            st.error(f"モデルファイルが見つかりません: {target_predictor_path}")
+        else:
+            generator = _load_generator(
+                str(target_config_path), str(target_predictor_path)
             )
-        with infer_col2:
-            st.markdown("### スカラー出力")
-            st.markdown(f"**予測 scalar_output**: {scalar_output:.6f}")
-            st.markdown(f"**正解 target_scalar**: {target_scalar:.6f}")
+            generator_output = _run_inference(generator, output_data)
+            vector_output = generator_output.vector_output[0].cpu().numpy()
+            variable_output = generator_output.variable_output[0].cpu().numpy()
+            scalar_output = float(generator_output.scalar_output[0].item())
 
-        st.markdown("### 可変長出力")
-        _show_pred_target_plot(variable_output.flatten(), target_variable_data)
+            predicted_class = int(vector_output.argmax())
+            target_class = int(output_data.target_vector.item())
+
+            infer_col1, infer_col2 = st.columns(2)
+            with infer_col1:
+                st.markdown("### 固定長ベクトル出力")
+                st.dataframe(vector_output.reshape(1, -1))
+                st.markdown(
+                    f"**クラス比較**: 予測クラス {predicted_class} / 正解クラス {target_class}"
+                )
+            with infer_col2:
+                st.markdown("### スカラー出力")
+                st.markdown(f"**予測 scalar_output**: {scalar_output:.6f}")
+                st.markdown(f"**正解 target_scalar**: {target_scalar:.6f}")
+
+            st.markdown("### 可変長出力")
+            _show_pred_target_plot(variable_output.flatten(), target_variable_data)
 
     st.markdown("---")
     st.markdown("### 詳細情報")
