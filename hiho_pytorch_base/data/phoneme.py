@@ -133,8 +133,11 @@ class OjtPhoneme(BasePhoneme):
 
     @classmethod
     def convert(cls, phonemes: Sequence["BasePhoneme"]) -> list["BasePhoneme"]:
-        """前後の sil を pau に変換する"""
+        """前後のsilとbrをpauに変換する"""
         result = list(phonemes)
+        for phoneme in result:
+            if phoneme.phoneme == "br":
+                phoneme.phoneme = cls.space_phoneme
         if "sil" in result[0].phoneme:
             result[0].phoneme = cls.space_phoneme
         if "sil" in result[-1].phoneme:
