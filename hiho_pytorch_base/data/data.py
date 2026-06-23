@@ -67,15 +67,23 @@ def _f0_mean(
     split_second_list: list[float],
     weight: numpy.ndarray,
 ) -> numpy.ndarray:
-    """秒境界で区切った各区間ごとに、有声フレームの重み付き平均でf0を平滑化する"""
+    """秒境界で区切った各区間ごとに、有声フレームの重み付き平均f0を算出する"""
     indexes = numpy.floor(numpy.array(split_second_list) * rate).astype(int)
     with numpy.errstate(invalid="ignore"):
-        for a, b in zip(
-            numpy.split(f0, indexes), numpy.split(weight, indexes), strict=True
-        ):
-            a[:] = numpy.sum(a[a > 0] * b[a > 0]) / numpy.sum(b[a > 0])
-    f0[numpy.isnan(f0)] = 0  # NOTE: 有声フレームが無い区間は 0/0=nan になるため0埋め
-    return f0
+        mean_f0 = numpy.array(
+            [
+                numpy.sum(a[a > 0] * b[a > 0]) / numpy.sum(b[a > 0])
+                for a, b in zip(
+                    numpy.split(f0, indexes),
+                    numpy.split(weight, indexes),
+                    strict=True,
+                )
+            ]
+        )
+    mean_f0[numpy.isnan(mean_f0)] = (
+        0  # NOTE: 有声フレームが無い区間は 0/0=nan になるため0埋め
+    )
+    return mean_f0
 
 
 def preprocess(
@@ -121,7 +129,6 @@ def preprocess(
         f0=f0,
         volume=volume,
         phoneme_list=d.phoneme_list,
-        mora_indexes=mora_indexes,
         rate=frame_rate,
     )
 
@@ -140,7 +147,6 @@ def _make_mora_f0(
     f0: numpy.ndarray,
     volume: numpy.ndarray,
     phoneme_list: list[BasePhoneme],
-    mora_indexes: list[int],
     rate: float,
 ) -> numpy.ndarray:
     """フレームf0をモーラ区間ごとにvolume重み付き平均し、モーラ単位のf0に変換する"""
@@ -155,23 +161,12 @@ def _make_mora_f0(
     split_second_list = [
         p.end for p in phoneme_list[:-1] if p.phoneme in mora_phoneme_list
     ]
-    frame_f0 = _f0_mean(
+    return _f0_mean(
         f0=f0,
         rate=rate,
         split_second_list=split_second_list,
         weight=weight,
     )
-
-    mora_f0 = numpy.zeros(len(mora_indexes), dtype=numpy.float64)
-    for i, phoneme_idx in enumerate(mora_indexes):
-        p = phoneme_list[phoneme_idx]
-        start, end = int(p.start * rate), int(p.end * rate)
-        if start == end:
-            raise ValueError(
-                f"モーラ区間がフレーム換算で長さ0です: phoneme={p.phoneme}, start={p.start}, end={p.end}"
-            )
-        mora_f0[i] = frame_f0[start:end][0]
-    return mora_f0
 
 
 def _make_index_array(
