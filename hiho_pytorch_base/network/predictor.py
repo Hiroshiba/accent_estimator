@@ -24,22 +24,29 @@ class Predictor(nn.Module):
         phoneme_embedding_size: int,
         hidden_size: int,
         encoder: Encoder,
+        use_f0: bool,
+        use_phoneme: bool,
     ):
         super().__init__()
 
         self.ssl_model = ssl_model
         self.sampling_rate = sampling_rate
         self.frame_rate = frame_rate
+        self.use_f0 = use_f0
+        self.use_phoneme = use_phoneme
         feature_size = ssl_model.hidden_size
 
         self.layer_weight = nn.Parameter(torch.zeros(ssl_model.num_hidden_layers))
 
         self.phoneme_embedder = nn.Embedding(phoneme_size, phoneme_embedding_size)
 
-        self.pre_phoneme = nn.Linear(
-            feature_size + phoneme_embedding_size + 1,
-            hidden_size,
-        )
+        input_size = feature_size
+        if use_phoneme:
+            input_size += phoneme_embedding_size
+        if use_f0:
+            input_size += 1
+
+        self.pre_phoneme = nn.Linear(input_size, hidden_size)
         self.encoder = encoder
         self.post = nn.Linear(hidden_size, 4 * 2)
 
@@ -82,21 +89,20 @@ class Predictor(nn.Module):
         )  # (B, max(pL), ?)
 
         max_phoneme_length = phoneme_feature.size(1)
-        phoneme_id_embed = self.phoneme_embedder(
-            phoneme_id[:, :max_phoneme_length]
-        )  # (B, max(pL), ?)
-
-        phoneme_f0 = self._scatter_mora_to_phoneme(
-            mora_f0=mora_f0,
-            vowel_index=vowel_index,
-            mora_length=mora_length,
-            max_phoneme_length=max_phoneme_length,
-        )  # (B, max(pL), 1)
-
-        h = torch.cat(
-            [phoneme_feature, phoneme_id_embed, phoneme_f0],
-            dim=2,
-        )  # (B, max(pL), ?)
+        h = phoneme_feature  # (B, max(pL), ?)
+        if self.use_phoneme:
+            phoneme_id_embed = self.phoneme_embedder(
+                phoneme_id[:, :max_phoneme_length]
+            )  # (B, max(pL), ?)
+            h = torch.cat([h, phoneme_id_embed], dim=2)  # (B, max(pL), ?)
+        if self.use_f0:
+            phoneme_f0 = self._scatter_mora_to_phoneme(
+                mora_f0=mora_f0,
+                vowel_index=vowel_index,
+                mora_length=mora_length,
+                max_phoneme_length=max_phoneme_length,
+            )  # (B, max(pL), 1)
+            h = torch.cat([h, phoneme_f0], dim=2)  # (B, max(pL), ?)
         h = self.pre_phoneme(h)  # (B, max(pL), ?)
 
         phoneme_mask = (
@@ -210,4 +216,6 @@ def create_predictor(config: NetworkConfig) -> Predictor:
         phoneme_embedding_size=config.phoneme_embedding_size,
         hidden_size=config.hidden_size,
         encoder=encoder,
+        use_f0=config.use_f0,
+        use_phoneme=config.use_phoneme,
     )

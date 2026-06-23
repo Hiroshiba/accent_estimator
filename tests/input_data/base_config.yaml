@@ -39,6 +39,8 @@ network:
   conformer_block_num: 2
   conformer_dropout_rate: 0.1
   phoneme_embedding_size: 4
+  use_f0: true
+  use_phoneme: true
 
 model: {}
 

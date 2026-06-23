@@ -56,6 +56,8 @@ class NetworkConfig(_Model):
     conformer_block_num: int
     conformer_dropout_rate: float
     phoneme_embedding_size: int
+    use_f0: bool
+    use_phoneme: bool
 
 
 class ModelConfig(_Model):
