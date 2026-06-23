@@ -79,7 +79,9 @@ def _check(
         collate_fn=collate_dataset_output,
         pin_memory=pin_memory,
         drop_last=drop_last,
-        timeout=0 if num_workers == 0 else 15,
+        timeout=(
+            0 if num_workers == 0 else 300
+        ),  # NOTE: ダウンロードが間に合わない可能性を考慮して長めにする
     )
     for _, _ in tqdm(enumerate(it), desc=desc, total=len(dataset) // batch_size):
         pass

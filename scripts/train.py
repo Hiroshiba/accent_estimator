@@ -148,7 +148,9 @@ def create_data_loader(
         collate_fn=collate_dataset_output,
         pin_memory=config.train.use_gpu,
         drop_last=for_train,
-        timeout=0 if num_workers == 0 else 30,
+        timeout=(
+            0 if num_workers == 0 else 300
+        ),  # NOTE: ダウンロードが間に合わない可能性を考慮して長めにする
         persistent_workers=num_workers > 0,
     )
 
