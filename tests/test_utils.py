@@ -11,6 +11,7 @@ from upath import UPath
 from hiho_pytorch_base.config import Config
 from hiho_pytorch_base.data.phoneme import OjtPhoneme
 from hiho_pytorch_base.data.sampling_data import SamplingData
+from hiho_pytorch_base.utility.upath_utility import ensure_path
 
 _FRAME_RATE = 50
 
@@ -78,7 +79,7 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
         for relative_path in all_relative_paths:
             file_path = root_dir / relative_path
             if not file_path.exists():
-                generator_func(file_path)
+                generator_func(ensure_path(file_path))
 
         if not train_pathlist_path.exists():
             train_pathlist_path.write_text("\n".join(all_relative_paths[:train_num]))
