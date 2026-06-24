@@ -7,6 +7,7 @@ import pytest
 from upath import UPath
 
 from hiho_pytorch_base.config import Config
+from hiho_pytorch_base.utility.upath_utility import ensure_path
 from tests.test_utils import setup_data_and_config
 
 
@@ -48,8 +49,8 @@ def train_config(data_and_config: Config) -> Config:
 
 
 @pytest.fixture(scope="session")
-def train_output_dir(output_data_dir: UPath) -> UPath:
+def train_output_dir(output_data_dir: UPath) -> Path:
     """学習結果ディレクトリのパス"""
-    output_dir = output_data_dir / "train_output"
+    output_dir = ensure_path(output_data_dir / "train_output")
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir

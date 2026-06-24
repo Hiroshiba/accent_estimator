@@ -5,6 +5,7 @@ import os
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -93,7 +94,7 @@ class TrainingContext:
     device: str
     epoch: int
     iteration: int
-    snapshot_path: UPath
+    snapshot_path: Path
     close_prefetch: Callable[[], None]
 
 
@@ -156,7 +157,7 @@ def create_data_loader(
 
 
 def setup_training_context(
-    config_yaml_path: UPath, output_dir: UPath
+    config_yaml_path: UPath, output_dir: Path
 ) -> TrainingContext:
     """TrainingContextを作成"""
     # config
@@ -441,12 +442,12 @@ def training_loop(context: TrainingContext) -> None:
             save_snapshot(context)
 
 
-def train(config_yaml_path: UPath, output_dir: UPath) -> None:
+def train(config_yaml_path: UPath, output_dir: Path) -> None:
     """機械学習モデルを学習する。スナップショットがあれば再開する。"""
     context = setup_training_context(config_yaml_path, output_dir)
 
     output_dir.mkdir(exist_ok=True, parents=True)
-    context.config.save(output_dir / "config.yaml")
+    context.config.save(UPath(output_dir / "config.yaml"))
 
     if context.snapshot_path.exists():
         load_snapshot(context)
@@ -464,5 +465,5 @@ def train(config_yaml_path: UPath, output_dir: UPath) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("config_yaml_path", type=UPath)
-    parser.add_argument("output_dir", type=UPath)
+    parser.add_argument("output_dir", type=Path)
     train(**vars(parser.parse_args()))

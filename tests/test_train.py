@@ -52,16 +52,16 @@ def test_model_creation(train_config: Config) -> None:
     assert hasattr(model, "forward")
 
 
-def test_e2e_train(train_config: Config, train_output_dir: UPath) -> None:
+def test_e2e_train(train_config: Config, train_output_dir: Path) -> None:
     """学習のe2eテスト"""
     output_dir = train_output_dir / "trained_model"
     if output_dir.exists():
         shutil.rmtree(output_dir)
 
     config_path = train_output_dir / "config.yaml"
-    train_config.save(config_path)
+    train_config.save(UPath(config_path))
 
-    train(config_path, output_dir)
+    train(UPath(config_path), output_dir)
 
     assert output_dir.exists()
     assert (output_dir / "config.yaml").exists()
@@ -71,7 +71,7 @@ def test_e2e_train(train_config: Config, train_output_dir: UPath) -> None:
     assert len(predictor_files) > 0
 
 
-def test_e2e_generate(train_output_dir: UPath, tmp_path: Path) -> None:
+def test_e2e_generate(train_output_dir: Path, tmp_path: Path) -> None:
     """生成のe2eテスト"""
     trained_model_dir = train_output_dir / "trained_model"
     if not trained_model_dir.exists():
@@ -80,7 +80,7 @@ def test_e2e_generate(train_output_dir: UPath, tmp_path: Path) -> None:
     generate_output_dir = tmp_path / "generate_output"
 
     generate(
-        model_dir=trained_model_dir,
+        model_dir=UPath(trained_model_dir),
         predictor_iteration=None,
         config_path=None,
         predictor_path=None,
