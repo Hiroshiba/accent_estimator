@@ -208,6 +208,8 @@ def setup_training_context(
     # predictor
     predictor = create_predictor(config.network)
     device = "cuda" if config.train.use_gpu else "cpu"
+    if config.train.weight_initializer is not None:
+        init_weights(predictor, name=config.train.weight_initializer)
     if config.train.pretrained_predictor_path is not None:
         state_dict = torch.load(
             BytesIO(config.train.pretrained_predictor_path.read_bytes()),
@@ -219,8 +221,6 @@ def setup_training_context(
     # model
     predictor_scripted: Predictor = torch.jit.script(predictor)  # type: ignore
     model = Model(model_config=config.model, predictor=predictor_scripted)
-    if config.train.weight_initializer is not None:
-        init_weights(model, name=config.train.weight_initializer)
     model.to(device)
 
     # evaluator
