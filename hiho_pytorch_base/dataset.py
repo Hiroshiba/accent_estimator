@@ -365,7 +365,10 @@ def create_dataset(config: DatasetConfig) -> DatasetCollection:
         test=_wrapper(tests, is_eval=False),
         eval=(_wrapper(tests, is_eval=True) if config.eval_for_test else None),
         valid=(
-            _wrapper(get_datas(config.valid, config.hdf5_cache_dir)[: config.valid_num], is_eval=True)
+            _wrapper(
+                get_datas(config.valid, config.hdf5_cache_dir)[: config.valid_num],
+                is_eval=True,
+            )
             if config.valid is not None
             else None
         ),
