@@ -81,7 +81,7 @@ uv sync
 
 ### 静的解析とフォーマット
 ```bash
-uv run pyright && uv run ruff check --fix && uv run ruff format
+uv run pyright && uv run ruff check --fix && uv run ruff format && pinact run --check --verify-comment
 ```
 
 ## 技術仕様
