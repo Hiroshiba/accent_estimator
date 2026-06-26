@@ -1,6 +1,7 @@
 """メインのネットワークモジュール"""
 
 import math
+from typing import Any
 
 import torch
 from torch import Tensor, nn
@@ -10,6 +11,46 @@ from ..data.phoneme import OjtPhoneme
 from .conformer.encoder import Encoder
 from .ssl_feature_models import HubertModel, create_base_hubert_config, load_ssl_model
 from .transformer.utility import make_non_pad_mask
+
+_SSL_MODEL_STATE_DICT_PREFIX = "ssl_model."
+
+
+def _remove_ssl_model_state_dict(
+    module: nn.Module,
+    state_dict: dict[str, Tensor],
+    prefix: str,
+    local_metadata: Any,
+) -> None:
+    """state_dictからSSLモデルのキーを除く"""
+    for key in list(state_dict.keys()):
+        if key.startswith(prefix + _SSL_MODEL_STATE_DICT_PREFIX):
+            del state_dict[key]
+
+
+def _reject_ssl_model_state_dict(
+    module: nn.Module,
+    state_dict: dict[str, Tensor],
+    prefix: str,
+    local_metadata: Any,
+    *args: Any,
+) -> None:
+    """読み込み時にSSLモデルのキーを拒否する"""
+    ssl_model_keys = [
+        key
+        for key in state_dict.keys()
+        if key.startswith(prefix + _SSL_MODEL_STATE_DICT_PREFIX)
+    ]
+    if len(ssl_model_keys) > 0:
+        raise RuntimeError(
+            f"Predictorのstate_dictにSSLモデルのキーが含まれています: {ssl_model_keys}"
+        )
+
+
+def _ignore_ssl_model_missing(module: nn.Module, incompatible_keys: Any) -> None:
+    """読み込み時にSSLモデルのキー欠落を許容する"""
+    for key in list(incompatible_keys.missing_keys):
+        if key.startswith(_SSL_MODEL_STATE_DICT_PREFIX):
+            incompatible_keys.missing_keys.remove(key)
 
 
 class Predictor(nn.Module):
@@ -49,6 +90,10 @@ class Predictor(nn.Module):
         self.pre_phoneme = nn.Linear(input_size, hidden_size)
         self.encoder = encoder
         self.post = nn.Linear(hidden_size, 4 * 2)
+
+        self.register_state_dict_post_hook(_remove_ssl_model_state_dict)
+        self.register_load_state_dict_pre_hook(_reject_ssl_model_state_dict)
+        self.register_load_state_dict_post_hook(_ignore_ssl_model_missing)
 
     def forward(  # noqa: D102
         self,
