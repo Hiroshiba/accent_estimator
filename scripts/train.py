@@ -288,6 +288,7 @@ def load_snapshot(context: TrainingContext) -> None:
     context.optimizer.load_state_dict(snapshot["optimizer"])
     context.scaler.load_state_dict(snapshot["scaler"])
     context.logger.load_state_dict(snapshot["logger"])
+    context.save_manager.load_state_dict(snapshot["save_manager"])
 
     context.iteration = snapshot["iteration"]
     context.epoch = snapshot["epoch"]
@@ -386,17 +387,22 @@ def save_predictor(
 
 def save_snapshot(context: TrainingContext) -> None:
     """チェックポイント保存する"""
+    tmp_snapshot_path = context.snapshot_path.with_name(
+        f"{context.snapshot_path.name}.tmp"
+    )
     torch.save(
         {
             "model": context.model.state_dict(),
             "optimizer": context.optimizer.state_dict(),
             "scaler": context.scaler.state_dict(),
             "logger": context.logger.state_dict(),
+            "save_manager": context.save_manager.state_dict(),
             "iteration": context.iteration,
             "epoch": context.epoch,
         },
-        context.snapshot_path,
+        tmp_snapshot_path,
     )
+    tmp_snapshot_path.replace(context.snapshot_path)
 
 
 def should_log_epoch(context: TrainingContext) -> bool:
