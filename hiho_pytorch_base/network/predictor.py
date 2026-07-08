@@ -248,7 +248,7 @@ def create_predictor(config: NetworkConfig) -> Predictor:
         attention_head_size=8,
         attention_dropout_rate=config.conformer_dropout_rate,
         use_macaron_style=True,
-        use_conv_glu_module=True,
+        use_conv_glu_module=config.conformer_use_conv_glu_module,
         conv_glu_module_kernel_size=31,
         feed_forward_hidden_size=config.hidden_size * 4,
         feed_forward_kernel_size=3,

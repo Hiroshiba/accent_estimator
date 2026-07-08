@@ -55,6 +55,7 @@ class NetworkConfig(_Model):
     hidden_size: int
     conformer_block_num: int
     conformer_dropout_rate: float
+    conformer_use_conv_glu_module: bool
     phoneme_embedding_size: int
     use_f0: bool
     use_phoneme: bool
@@ -137,4 +138,5 @@ class Config(_Model):
 
 def backward_compatible(d: dict[str, Any]) -> None:
     """設定の後方互換性を保つための変換"""
-    pass
+    if "conformer_use_conv_glu_module" not in d["network"]:
+        d["network"]["conformer_use_conv_glu_module"] = True
