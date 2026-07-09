@@ -8,9 +8,12 @@ from torch import Tensor, nn
 
 from ..config import NetworkConfig
 from ..data.phoneme import OjtPhoneme
-from .conformer.encoder import Encoder
+from .cnn import Cnn
+from .conformer.encoder import Encoder as ConformerEncoder
 from .ssl_feature_models import HubertModel, create_base_hubert_config, load_ssl_model
 from .transformer.utility import make_non_pad_mask
+
+type Encoder = ConformerEncoder | Cnn
 
 _SSL_MODEL_STATE_DICT_PREFIX = "ssl_model."
 
@@ -239,27 +242,38 @@ def create_predictor(config: NetworkConfig) -> Predictor:
     )
     ssl_model.freeze()
 
-    encoder = Encoder(
-        hidden_size=config.hidden_size,
-        condition_size=0,
-        block_num=config.conformer_block_num,
-        dropout_rate=config.conformer_dropout_rate,
-        positional_dropout_rate=config.conformer_dropout_rate,
-        attention_head_size=8,
-        attention_dropout_rate=config.conformer_dropout_rate,
-        use_macaron_style=True,
-        use_conv_glu_module=config.conformer_use_conv_glu_module,
-        conv_glu_module_kernel_size=31,
-        feed_forward_hidden_size=config.hidden_size * 4,
-        feed_forward_kernel_size=3,
-    )
+    encoder_config = config.encoder
+    match encoder_config.type:
+        case "conformer":
+            encoder = ConformerEncoder(
+                hidden_size=encoder_config.hidden_size,
+                condition_size=0,
+                block_num=encoder_config.block_num,
+                dropout_rate=encoder_config.dropout_rate,
+                positional_dropout_rate=encoder_config.dropout_rate,
+                attention_head_size=8,
+                attention_dropout_rate=encoder_config.dropout_rate,
+                use_macaron_style=True,
+                use_conv_glu_module=encoder_config.use_conv_glu_module,
+                conv_glu_module_kernel_size=31,
+                feed_forward_hidden_size=encoder_config.hidden_size * 4,
+                feed_forward_kernel_size=3,
+            )
+        case "cnn":
+            encoder = Cnn(
+                hidden_size=encoder_config.hidden_size,
+                layer_num=encoder_config.layer_num,
+                kernel_size=encoder_config.kernel_size,
+                dropout_rate=encoder_config.dropout_rate,
+            )
+
     return Predictor(
         ssl_model=ssl_model,
         sampling_rate=config.sampling_rate,
         frame_rate=config.frame_rate,
         phoneme_size=OjtPhoneme.num_phoneme,
         phoneme_embedding_size=config.phoneme_embedding_size,
-        hidden_size=config.hidden_size,
+        hidden_size=config.encoder.hidden_size,
         encoder=encoder,
         use_f0=config.use_f0,
         use_phoneme=config.use_phoneme,

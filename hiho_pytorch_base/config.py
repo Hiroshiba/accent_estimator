@@ -1,6 +1,6 @@
 """機械学習プロジェクトの設定モジュール"""
 
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -45,6 +45,26 @@ class DatasetConfig(_Model):
     frame_rate: float
 
 
+class ConformerEncoderConfig(_Model):
+    """Conformerエンコーダーの設定"""
+
+    type: Literal["conformer"]
+    hidden_size: int
+    block_num: int
+    dropout_rate: float
+    use_conv_glu_module: bool
+
+
+class CnnEncoderConfig(_Model):
+    """CNNエンコーダーの設定"""
+
+    type: Literal["cnn"]
+    hidden_size: int
+    layer_num: int
+    kernel_size: int
+    dropout_rate: float
+
+
 class NetworkConfig(_Model):
     """ニューラルネットワークの設定"""
 
@@ -52,10 +72,9 @@ class NetworkConfig(_Model):
     ssl_model_path: UPathField
     sampling_rate: int
     frame_rate: float
-    hidden_size: int
-    conformer_block_num: int
-    conformer_dropout_rate: float
-    conformer_use_conv_glu_module: bool
+    encoder: Annotated[
+        ConformerEncoderConfig | CnnEncoderConfig, Field(discriminator="type")
+    ]
     phoneme_embedding_size: int
     use_f0: bool
     use_phoneme: bool
@@ -140,3 +159,12 @@ def backward_compatible(d: dict[str, Any]) -> None:
     """設定の後方互換性を保つための変換"""
     if "conformer_use_conv_glu_module" not in d["network"]:
         d["network"]["conformer_use_conv_glu_module"] = True
+
+    if "encoder" not in d["network"]:
+        d["network"]["encoder"] = {
+            "type": "conformer",
+            "hidden_size": d["network"]["hidden_size"],
+            "block_num": d["network"]["conformer_block_num"],
+            "dropout_rate": d["network"]["conformer_dropout_rate"],
+            "use_conv_glu_module": d["network"]["conformer_use_conv_glu_module"],
+        }

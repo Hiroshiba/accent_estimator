@@ -31,13 +31,16 @@ dataset:
   frame_rate: 50
 
 network:
+  encoder:
+    type: "cnn"
+    hidden_size: 16
+    layer_num: 6
+    kernel_size: 5
+    dropout_rate: 0.1
   ssl_model_type: "hubert"
   ssl_model_path: "not/exist/path"
   sampling_rate: 16000
   frame_rate: 50
-  hidden_size: 16
-  conformer_block_num: 2
-  conformer_dropout_rate: 0.1
   phoneme_embedding_size: 4
   use_f0: true
   use_phoneme: true
