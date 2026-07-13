@@ -8,6 +8,7 @@ from torch import Tensor, nn
 from upath import UPath
 
 from hiho_pytorch_base.config import Config
+from hiho_pytorch_base.dataset import create_dataset
 from hiho_pytorch_base.network.predictor import Predictor, create_predictor
 
 
@@ -28,6 +29,8 @@ class PredictorWrapper(nn.Module):
         phoneme_id: Tensor,  # (B, max(pL))
         vowel_index: Tensor,  # (B, max(mL))
         mora_f0: Tensor,  # (B, max(mL))
+        accent_input: Tensor,  # (B, max(mL), 2, 4)
+        t: Tensor,  # (B,)
         wave_length: Tensor,  # (B,)
         phoneme_length: Tensor,  # (B,)
         mora_length: Tensor,  # (B,)
@@ -41,6 +44,8 @@ class PredictorWrapper(nn.Module):
             wave_length=wave_length,
             phoneme_length=phoneme_length,
             mora_length=mora_length,
+            accent_input=accent_input,
+            t=t,
         )
 
 
@@ -50,7 +55,10 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
 
     config = Config.load(config_yaml_path)
 
-    predictor = create_predictor(config.network)
+    _datasets, statistics = create_dataset(
+        config.dataset, statistics_workers=config.train.prefetch_workers
+    )
+    predictor = create_predictor(config.network, statistics=statistics)
     wrapper = PredictorWrapper(predictor)
     wrapper.eval()
 
@@ -75,6 +83,8 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
         torch.arange(1, max_mora_length * 2, 2).unsqueeze(0).expand(batch_size, -1)
     )
     mora_f0 = torch.randn(batch_size, max_mora_length)
+    accent_input = torch.randn(batch_size, max_mora_length, 2, 4)
+    t = torch.rand(batch_size)
     phoneme_length = torch.tensor([max_phoneme_length] * batch_size)
     mora_length = torch.tensor([max_mora_length] * batch_size)
 
@@ -86,6 +96,8 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
             phoneme_id,
             vowel_index,
             mora_f0,
+            accent_input,
+            t,
             wave_length,
             phoneme_length,
             mora_length,
@@ -97,6 +109,8 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
             "phoneme_id",
             "vowel_index",
             "mora_f0",
+            "accent_input",
+            "t",
             "wave_length",
             "phoneme_length",
             "mora_length",
@@ -108,6 +122,8 @@ def export_onnx(config_yaml_path: UPath, output_path: Path, verbose: bool) -> No
             "phoneme_id": {0: "batch_size", 1: "max_phoneme_length"},
             "vowel_index": {0: "batch_size", 1: "max_mora_length"},
             "mora_f0": {0: "batch_size", 1: "max_mora_length"},
+            "accent_input": {0: "batch_size", 1: "max_mora_length"},
+            "t": {0: "batch_size"},
             "wave_length": {0: "batch_size"},
             "phoneme_length": {0: "batch_size"},
             "mora_length": {0: "batch_size"},

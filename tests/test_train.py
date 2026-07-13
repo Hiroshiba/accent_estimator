@@ -35,7 +35,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]):
 
 def test_dataset_creation(train_config: Config) -> None:
     """データセットの作成テスト"""
-    datasets = create_dataset(train_config.dataset)
+    datasets, _statistics = create_dataset(
+        train_config.dataset, statistics_workers=train_config.train.prefetch_workers
+    )
 
     assert datasets.train is not None
     assert datasets.test is not None
@@ -45,7 +47,10 @@ def test_dataset_creation(train_config: Config) -> None:
 
 def test_model_creation(train_config: Config) -> None:
     """モデルの作成テスト"""
-    predictor = create_predictor(train_config.network)
+    _datasets, statistics = create_dataset(
+        train_config.dataset, statistics_workers=train_config.train.prefetch_workers
+    )
+    predictor = create_predictor(train_config.network, statistics=statistics)
     model = Model(model_config=train_config.model, predictor=predictor)
 
     assert model is not None

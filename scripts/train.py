@@ -166,7 +166,9 @@ def setup_training_context(
     config.validate_config()
 
     # dataset
-    datasets = create_dataset(config.dataset)
+    datasets, statistics = create_dataset(
+        config.dataset, statistics_workers=config.train.prefetch_workers
+    )
 
     # prefetch
     train_indices = torch.randperm(len(datasets.train)).tolist()
@@ -206,7 +208,7 @@ def setup_training_context(
     )
 
     # predictor
-    predictor = create_predictor(config.network)
+    predictor = create_predictor(config.network, statistics=statistics)
     device = "cuda" if config.train.use_gpu else "cpu"
     if config.train.weight_initializer is not None:
         init_weights(predictor, name=config.train.weight_initializer)

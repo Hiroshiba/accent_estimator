@@ -23,7 +23,9 @@ def check_dataset(config_yaml_path: UPath, trials: int, break_on_error: bool) ->
     batch_size = config.train.batch_size
     pin_memory = config.train.use_gpu
 
-    datasets = create_dataset(config.dataset)
+    datasets, _statistics = create_dataset(
+        config.dataset, statistics_workers=config.train.prefetch_workers
+    )
 
     wrapper = partial(
         _check,

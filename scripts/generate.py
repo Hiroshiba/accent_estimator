@@ -65,7 +65,10 @@ def generate(
         config=config, predictor=to_local_path(predictor_path), use_gpu=use_gpu
     )
 
-    dataset = create_dataset(config.dataset).get(dataset_type)
+    datasets, _statistics = create_dataset(
+        config.dataset, statistics_workers=config.train.prefetch_workers
+    )
+    dataset = datasets.get(dataset_type)
     if num_files is not None:
         if num_files > len(dataset):
             raise ValueError(
@@ -89,6 +92,7 @@ def generate(
             phoneme_id=batch.phoneme_id,
             vowel_index=batch.vowel_index,
             mora_f0=batch.mora_f0,
+            accent_noise=batch.accent_noise,
             wave_length=batch.wave_length,
             phoneme_length=batch.phoneme_length,
             mora_length=batch.mora_length,

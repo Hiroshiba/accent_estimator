@@ -43,7 +43,9 @@ accent_display_order = [2, 3, 0, 1]
 def _load_config_and_dataset(config_path_str: str) -> tuple[Config, DatasetCollection]:
     """configパスからConfigとDatasetCollectionを読み込みキャッシュする"""
     config = Config.load(UPath(config_path_str))
-    dataset_collection = create_dataset(config.dataset)
+    dataset_collection, _statistics = create_dataset(
+        config.dataset, statistics_workers=config.train.prefetch_workers
+    )
     return config, dataset_collection
 
 
@@ -67,6 +69,7 @@ def _run_inference(generator: Generator, output_data: OutputData) -> GeneratorOu
         phoneme_id=batch.phoneme_id,
         vowel_index=batch.vowel_index,
         mora_f0=batch.mora_f0,
+        accent_noise=batch.accent_noise,
         wave_length=batch.wave_length,
         phoneme_length=batch.phoneme_length,
         mora_length=batch.mora_length,
