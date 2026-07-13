@@ -5,6 +5,7 @@ from typing import Self
 
 import torch
 from torch import Tensor, nn
+from torch.nn.functional import cross_entropy, mse_loss
 
 from .batch import BatchOutput
 from .generator import Generator, GeneratorOutput
@@ -65,6 +66,7 @@ class Evaluator(nn.Module):
             phoneme_id=batch.phoneme_id,
             vowel_index=batch.vowel_index,
             mora_f0=batch.mora_f0,
+            accent_noise=batch.accent_noise,
             wave_length=batch.wave_length,
             phoneme_length=batch.phoneme_length,
             mora_length=batch.mora_length,
@@ -77,7 +79,16 @@ class Evaluator(nn.Module):
         flat_output = output[mora_mask]  # (sum(mL), 2, 4)
         flat_target = batch.accent[:, :max_mora_length][mora_mask]  # (sum(mL), 4)
 
-        loss = torch.nn.functional.cross_entropy(flat_output, flat_target)
+        if self.generator.use_diffusion:
+            target_onehot = self.generator.denormalize(
+                batch.accent_target
+            )  # (B, max(mL), 2, 4)
+            flat_target_onehot = target_onehot[:, :max_mora_length][
+                mora_mask
+            ]  # (sum(mL), 2, 4)
+            loss = mse_loss(flat_output, flat_target_onehot)
+        else:
+            loss = cross_entropy(flat_output, flat_target)
 
         precision_accent_start, recall_accent_start = _precision_recall(
             flat_output[:, :, 0], flat_target[:, 0]
