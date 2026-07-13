@@ -8,6 +8,7 @@ from torch import Tensor, nn
 
 from ..config import NetworkConfig
 from ..data.phoneme import OjtPhoneme
+from ..data.statistics import DataStatistics
 from .cnn import Cnn
 from .conformer.encoder import Encoder as ConformerEncoder
 from .ssl_feature_models import HubertModel, create_base_hubert_config, load_ssl_model
@@ -70,6 +71,8 @@ class Predictor(nn.Module):
         encoder: Encoder,
         use_f0: bool,
         use_phoneme: bool,
+        use_diffusion: bool,
+        statistics: DataStatistics,
     ):
         super().__init__()
 
@@ -78,7 +81,15 @@ class Predictor(nn.Module):
         self.frame_rate = frame_rate
         self.use_f0 = use_f0
         self.use_phoneme = use_phoneme
+        self.use_diffusion = use_diffusion
         feature_size = ssl_model.hidden_size
+
+        self.register_buffer(
+            "accent_mean", torch.from_numpy(statistics.accent_mean).float()
+        )
+        self.register_buffer(
+            "accent_std", torch.from_numpy(statistics.accent_std).float()
+        )
 
         self.layer_weight = nn.Parameter(torch.zeros(ssl_model.num_hidden_layers))
 
@@ -89,6 +100,8 @@ class Predictor(nn.Module):
             input_size += phoneme_embedding_size
         if use_f0:
             input_size += 1
+        if use_diffusion:
+            input_size += 2 * 4 + 1
 
         self.pre_phoneme = nn.Linear(input_size, hidden_size)
         self.encoder = encoder
@@ -109,6 +122,8 @@ class Predictor(nn.Module):
         wave_length: Tensor,  # (B,)
         phoneme_length: Tensor,  # (B,)
         mora_length: Tensor,  # (B,)
+        accent_input: Tensor,  # (B, max(mL), 2, 4)
+        t: Tensor,  # (B,)
     ) -> Tensor:  # (B, max(mL), 2, 4)
         attention_mask = make_non_pad_mask(wave_length).long()  # (B, max(wL))
         with torch.no_grad():
@@ -145,12 +160,28 @@ class Predictor(nn.Module):
             h = torch.cat([h, phoneme_id_embed], dim=2)  # (B, max(pL), ?)
         if self.use_f0:
             phoneme_f0 = self._scatter_mora_to_phoneme(
-                mora_f0=mora_f0,
+                mora_value=mora_f0.unsqueeze(-1),
                 vowel_index=vowel_index,
                 mora_length=mora_length,
                 max_phoneme_length=max_phoneme_length,
             )  # (B, max(pL), 1)
             h = torch.cat([h, phoneme_f0], dim=2)  # (B, max(pL), ?)
+        if self.use_diffusion:
+            mora_accent_input = accent_input.reshape(
+                accent_input.size(0), accent_input.size(1), 2 * 4
+            )  # (B, max(mL), 8)
+            phoneme_accent_input = self._scatter_mora_to_phoneme(
+                mora_value=mora_accent_input,
+                vowel_index=vowel_index,
+                mora_length=mora_length,
+                max_phoneme_length=max_phoneme_length,
+            )  # (B, max(pL), 8)
+            h = torch.cat([h, phoneme_accent_input], dim=2)  # (B, max(pL), ?)
+
+            phoneme_t = (
+                t.unsqueeze(1).unsqueeze(2).expand(t.size(0), max_phoneme_length, 1)
+            )  # (B, max(pL), 1)
+            h = torch.cat([h, phoneme_t], dim=2)  # (B, max(pL), ?)
         h = self.pre_phoneme(h)  # (B, max(pL), ?)
 
         phoneme_mask = (
@@ -198,20 +229,24 @@ class Predictor(nn.Module):
 
     def _scatter_mora_to_phoneme(
         self,
-        mora_f0: Tensor,  # (B, max(mL))
+        mora_value: Tensor,  # (B, max(mL), ?)
         vowel_index: Tensor,  # (B, max(mL))
         mora_length: Tensor,  # (B,)
         max_phoneme_length: int,
-    ) -> Tensor:  # (B, max(pL), 1)
-        """モーラ単位のf0を母音位置に配置し、子音位置は0埋めの音素単位f0にする"""
-        batch_size = mora_f0.size(0)
-        mora_mask = make_non_pad_mask(mora_length).to(mora_f0.device)  # (B, max(mL))
+    ) -> Tensor:  # (B, max(pL), ?)
+        """モーラ単位の値を母音位置に配置し、子音位置は0埋めの音素単位の値にする"""
+        batch_size, _, num_feature = mora_value.shape
+        mora_mask = make_non_pad_mask(mora_length).to(mora_value.device)  # (B, max(mL))
         masked_index = torch.where(
             mora_mask, vowel_index, torch.full_like(vowel_index, max_phoneme_length)
         )  # (B, max(mL))
-        phoneme_f0 = mora_f0.new_zeros(batch_size, max_phoneme_length + 1)
-        phoneme_f0 = phoneme_f0.scatter(1, masked_index, mora_f0)
-        return phoneme_f0[:, :max_phoneme_length].unsqueeze(-1)
+        phoneme_value = mora_value.new_zeros(
+            batch_size, max_phoneme_length + 1, num_feature
+        )
+        phoneme_value = phoneme_value.scatter(
+            1, masked_index.unsqueeze(-1).expand(-1, -1, num_feature), mora_value
+        )
+        return phoneme_value[:, :max_phoneme_length]
 
     def _select_vowel(
         self,
@@ -227,7 +262,7 @@ class Predictor(nn.Module):
         return torch.gather(phoneme_h, 1, index)
 
 
-def create_predictor(config: NetworkConfig) -> Predictor:
+def create_predictor(config: NetworkConfig, *, statistics: DataStatistics) -> Predictor:
     """設定からPredictorを作成"""
     hubert_config = create_base_hubert_config()
     expected_frame_rate = config.sampling_rate / math.prod(hubert_config.conv_stride)
@@ -277,4 +312,6 @@ def create_predictor(config: NetworkConfig) -> Predictor:
         encoder=encoder,
         use_f0=config.use_f0,
         use_phoneme=config.use_phoneme,
+        use_diffusion=config.use_diffusion,
+        statistics=statistics,
     )

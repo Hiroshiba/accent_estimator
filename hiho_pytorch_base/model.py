@@ -3,8 +3,9 @@
 from dataclasses import dataclass
 from typing import Self
 
+import torch
 from torch import Tensor, nn
-from torch.nn.functional import cross_entropy
+from torch.nn.functional import cross_entropy, mse_loss
 
 from .batch import BatchOutput
 from .config import ModelConfig
@@ -71,6 +72,13 @@ class Model(nn.Module):
 
     def forward(self, batch: BatchOutput) -> ModelOutput:
         """データをネットワークに入力して損失などを計算する"""
+        if self.model_config.use_diffusion:
+            return self._forward_diffusion(batch)
+        else:
+            return self._forward_classification(batch)
+
+    def _forward_classification(self, batch: BatchOutput) -> ModelOutput:
+        """分類による損失などを計算する"""
         output = self.predictor(
             wave=batch.wave,
             phoneme_index=batch.phoneme_index,
@@ -80,6 +88,8 @@ class Model(nn.Module):
             wave_length=batch.wave_length,
             phoneme_length=batch.phoneme_length,
             mora_length=batch.mora_length,
+            accent_input=batch.accent_input,
+            t=batch.t,
         )  # (B, max(mL), 2, 4)
 
         max_mora_length = output.size(1)
@@ -115,5 +125,45 @@ class Model(nn.Module):
             recall_accent_end=recall_accent_end,
             recall_accent_phrase_start=recall_accent_phrase_start,
             recall_accent_phrase_end=recall_accent_phrase_end,
+            data_num=batch.data_num,
+        )
+
+    def _forward_diffusion(self, batch: BatchOutput) -> ModelOutput:
+        """diffusionによるvelocity MSE損失を計算する"""
+        velocity = self.predictor(
+            wave=batch.wave,
+            phoneme_index=batch.phoneme_index,
+            phoneme_id=batch.phoneme_id,
+            vowel_index=batch.vowel_index,
+            mora_f0=batch.mora_f0,
+            wave_length=batch.wave_length,
+            phoneme_length=batch.phoneme_length,
+            mora_length=batch.mora_length,
+            accent_input=batch.accent_input,
+            t=batch.t,
+        )  # (B, max(mL), 2, 4)
+
+        max_mora_length = velocity.size(1)
+        mora_mask = make_non_pad_mask(batch.mora_length).to(
+            velocity.device
+        )  # (B, max(mL))
+
+        flat_velocity = velocity[mora_mask]  # (sum(mL), 2, 4)
+        target_v = batch.accent_target - batch.accent_noise  # (B, max(mL), 2, 4)
+        flat_target_v = target_v[:, :max_mora_length][mora_mask]  # (sum(mL), 2, 4)
+
+        loss = mse_loss(flat_velocity, flat_target_v)
+
+        zero = torch.zeros((), device=loss.device)
+        return ModelOutput(
+            loss=loss,
+            precision_accent_start=zero,
+            precision_accent_end=zero,
+            precision_accent_phrase_start=zero,
+            precision_accent_phrase_end=zero,
+            recall_accent_start=zero,
+            recall_accent_end=zero,
+            recall_accent_phrase_start=zero,
+            recall_accent_phrase_end=zero,
             data_num=batch.data_num,
         )
