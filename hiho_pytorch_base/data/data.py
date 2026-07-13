@@ -1,6 +1,7 @@
 """データ処理モジュール"""
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy
 import torch
@@ -30,6 +31,11 @@ voiced_phoneme_list = (
     + ["n", "m", "y", "r", "w", "g", "z", "j", "d", "b"]
     + ["ny", "my", "ry", "gy", "by", "gw"]
 )
+
+
+def read_bool_list(path: Path) -> list[bool]:
+    """空白区切りで 0/1 が並ぶテキストを bool 配列に変換"""
+    return [bool(int(s)) for s in path.read_text().split()]
 
 
 @dataclass

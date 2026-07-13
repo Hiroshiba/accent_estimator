@@ -17,17 +17,12 @@ from torch.utils.data import Dataset as BaseDataset
 from upath import UPath
 
 from .config import DataFileConfig, DatasetConfig
-from .data.data import InputData, OutputData, preprocess
+from .data.data import InputData, OutputData, preprocess, read_bool_list
 from .data.phoneme import OjtPhoneme
 from .data.sampling_data import SamplingData
 from .data.wave import Wave
 from .utility.pathlist_utility import get_data_paths
 from .utility.upath_utility import to_local_path
-
-
-def _read_bool_list(path: Path) -> list[bool]:
-    """空白区切りで 0/1 が並ぶテキストを bool 配列に変換"""
-    return [bool(int(s)) for s in path.read_text().split()]
 
 
 @dataclass
@@ -155,12 +150,12 @@ class LazyInputData:
             ),
             f0=SamplingData.load(to_local_path(self.f0_path)),
             volume=SamplingData.load(to_local_path(self.volume_path)),
-            accent_start=_read_bool_list(to_local_path(self.accent_start_path)),
-            accent_end=_read_bool_list(to_local_path(self.accent_end_path)),
-            accent_phrase_start=_read_bool_list(
+            accent_start=read_bool_list(to_local_path(self.accent_start_path)),
+            accent_end=read_bool_list(to_local_path(self.accent_end_path)),
+            accent_phrase_start=read_bool_list(
                 to_local_path(self.accent_phrase_start_path)
             ),
-            accent_phrase_end=_read_bool_list(
+            accent_phrase_end=read_bool_list(
                 to_local_path(self.accent_phrase_end_path)
             ),
             speaker_id=self.speaker_id,

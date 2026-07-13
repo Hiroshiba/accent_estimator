@@ -35,6 +35,7 @@ class DatasetConfig(_Model):
     train: DataFileConfig
     valid: DataFileConfig | None = None
     hdf5_cache_dir: UPathField | None = None
+    statistics_cache_dir: UPathField | None = None
     train_num: int | None = None
     test_num: int
     valid_num: int | None = None
@@ -78,12 +79,13 @@ class NetworkConfig(_Model):
     phoneme_embedding_size: int
     use_f0: bool
     use_phoneme: bool
+    use_diffusion: bool
 
 
 class ModelConfig(_Model):
     """モデルの設定"""
 
-    pass
+    use_diffusion: bool
 
 
 class TrainConfig(_Model):
@@ -92,6 +94,7 @@ class TrainConfig(_Model):
     batch_size: int
     gradient_accumulation: int = 1
     eval_batch_size: int
+    diffusion_step_num: int
     log_epoch: int
     eval_epoch: int
     snapshot_epoch: int
@@ -148,6 +151,7 @@ class Config(_Model):
         assert self.train.eval_epoch % self.train.log_epoch == 0
         assert self.dataset.sampling_rate == self.network.sampling_rate
         assert self.dataset.frame_rate == self.network.frame_rate
+        assert self.network.use_diffusion == self.model.use_diffusion
 
     def add_git_info(self) -> None:
         """Git情報をプロジェクトタグに追加"""
@@ -168,3 +172,10 @@ def backward_compatible(d: dict[str, Any]) -> None:
             "dropout_rate": d["network"]["conformer_dropout_rate"],
             "use_conv_glu_module": d["network"]["conformer_use_conv_glu_module"],
         }
+
+    if "use_diffusion" not in d["network"]:
+        d["network"]["use_diffusion"] = False
+    if "use_diffusion" not in d["model"]:
+        d["model"]["use_diffusion"] = False
+    if "diffusion_step_num" not in d["train"]:
+        d["train"]["diffusion_step_num"] = 10
