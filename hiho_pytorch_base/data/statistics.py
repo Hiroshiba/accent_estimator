@@ -13,7 +13,7 @@ from upath import UPath
 
 from ..config import DataFileConfig, DatasetConfig
 from ..utility.upath_utility import to_local_path
-from .data import mora_phoneme_list, read_bool_list
+from .base import mora_phoneme_list, read_bool_list
 from .phoneme import OjtPhoneme
 
 

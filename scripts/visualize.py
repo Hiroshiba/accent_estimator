@@ -19,7 +19,8 @@ from upath import UPath
 
 from hiho_pytorch_base.batch import collate_dataset_output
 from hiho_pytorch_base.config import Config
-from hiho_pytorch_base.data.data import OutputData, mora_phoneme_list
+from hiho_pytorch_base.data.base import mora_phoneme_list
+from hiho_pytorch_base.data.data import OutputData
 from hiho_pytorch_base.dataset import (
     DatasetCollection,
     DatasetType,

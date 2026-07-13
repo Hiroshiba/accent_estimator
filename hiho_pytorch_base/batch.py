@@ -21,6 +21,10 @@ class BatchOutput:
     vowel_index: Tensor  # (B, max(mL))
     mora_f0: Tensor  # (B, max(mL))
     accent: Tensor  # (B, max(mL), ?)
+    accent_target: Tensor  # (B, max(mL), 2, 4)
+    accent_noise: Tensor  # (B, max(mL), 2, 4)
+    accent_input: Tensor  # (B, max(mL), 2, 4)
+    t: Tensor  # (B,)
     speaker_id: Tensor  # (B,)
     wave_length: Tensor  # (B,)
     phoneme_length: Tensor  # (B,)
@@ -43,6 +47,16 @@ class BatchOutput:
         )
         self.mora_f0 = to_device(self.mora_f0, device, non_blocking=non_blocking)
         self.accent = to_device(self.accent, device, non_blocking=non_blocking)
+        self.accent_target = to_device(
+            self.accent_target, device, non_blocking=non_blocking
+        )
+        self.accent_noise = to_device(
+            self.accent_noise, device, non_blocking=non_blocking
+        )
+        self.accent_input = to_device(
+            self.accent_input, device, non_blocking=non_blocking
+        )
+        self.t = to_device(self.t, device, non_blocking=non_blocking)
         self.speaker_id = to_device(self.speaker_id, device, non_blocking=non_blocking)
         self.wave_length = to_device(
             self.wave_length, device, non_blocking=non_blocking
@@ -75,6 +89,16 @@ def collate_dataset_output(data_list: list[OutputData]) -> BatchOutput:
         vowel_index=pad_sequence([d.vowel_index for d in data_list], batch_first=True),
         mora_f0=pad_sequence([d.mora_f0 for d in data_list], batch_first=True),
         accent=pad_sequence([d.accent for d in data_list], batch_first=True),
+        accent_target=pad_sequence(
+            [d.accent_target for d in data_list], batch_first=True
+        ),
+        accent_noise=pad_sequence(
+            [d.accent_noise for d in data_list], batch_first=True
+        ),
+        accent_input=pad_sequence(
+            [d.accent_input for d in data_list], batch_first=True
+        ),
+        t=collate_stack([d.t for d in data_list]),
         speaker_id=collate_stack([d.speaker_id for d in data_list]),
         wave_length=torch.tensor([d.wave.shape[0] for d in data_list]),
         phoneme_length=torch.tensor([d.phoneme_id.shape[0] for d in data_list]),

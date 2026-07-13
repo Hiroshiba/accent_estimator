@@ -1,41 +1,16 @@
 """データ処理モジュール"""
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy
 import torch
 from torch import Tensor
 
+from .base import mora_phoneme_list, voiced_phoneme_list
 from .phoneme import BasePhoneme
 from .sampling_data import SamplingData
+from .statistics import DataStatistics
 from .wave import Wave
-
-mora_phoneme_list = (
-    "a",
-    "i",
-    "u",
-    "e",
-    "o",
-    "I",
-    "U",
-    "E",
-    "N",
-    "cl",
-    "pau",
-    "sil",
-)
-
-voiced_phoneme_list = (
-    ["a", "i", "u", "e", "o", "N"]
-    + ["n", "m", "y", "r", "w", "g", "z", "j", "d", "b"]
-    + ["ny", "my", "ry", "gy", "by", "gw"]
-)
-
-
-def read_bool_list(path: Path) -> list[bool]:
-    """空白区切りで 0/1 が並ぶテキストを bool 配列に変換"""
-    return [bool(int(s)) for s in path.read_text().split()]
 
 
 @dataclass
@@ -64,6 +39,10 @@ class OutputData:
     vowel_index: Tensor
     mora_f0: Tensor
     accent: Tensor
+    accent_target: Tensor
+    accent_noise: Tensor
+    accent_input: Tensor
+    t: Tensor
     speaker_id: Tensor
 
 
@@ -93,10 +72,15 @@ def _f0_mean(
 
 
 def preprocess(
-    d: InputData, *, is_eval: bool, sampling_rate: int, frame_rate: float
+    d: InputData,
+    *,
+    is_eval: bool,
+    sampling_rate: int,
+    frame_rate: float,
+    statistics: DataStatistics,
 ) -> OutputData:
     """データ処理"""
-    _ = is_eval
+    rng = numpy.random.default_rng()
 
     resampled = Wave(d.wave, d.sampling_rate).resample(sampling_rate)
     frame_length = round(len(resampled) / sampling_rate * frame_rate)
@@ -117,6 +101,18 @@ def preprocess(
     accent = numpy.stack(
         [accent_start, accent_end, accent_phrase_start, accent_phrase_end], axis=1
     )
+
+    onehot = numpy.zeros((len(accent), 2, 4), dtype=numpy.float64)
+    onehot[:, 0, :] = ~accent.astype(bool)
+    onehot[:, 1, :] = accent.astype(bool)
+    accent_target = (onehot - statistics.accent_mean) / statistics.accent_std
+
+    if is_eval:
+        t = 0.0
+    else:
+        t = float(_sigmoid(rng.standard_normal()))
+    accent_noise = rng.standard_normal(accent_target.shape)
+    accent_input = accent_noise + t * (accent_target - accent_noise)
 
     vowel_index = numpy.array(mora_indexes)
 
@@ -145,8 +141,17 @@ def preprocess(
         vowel_index=torch.from_numpy(vowel_index).long(),
         mora_f0=torch.from_numpy(mora_f0).float(),
         accent=torch.from_numpy(accent).long(),
+        accent_target=torch.from_numpy(accent_target).float(),
+        accent_noise=torch.from_numpy(accent_noise).float(),
+        accent_input=torch.from_numpy(accent_input).float(),
+        t=torch.tensor(t, dtype=torch.float32),
         speaker_id=torch.tensor(d.speaker_id).long(),
     )
+
+
+def _sigmoid(a: float | numpy.ndarray) -> float | numpy.ndarray:
+    """シグモイド関数"""
+    return 1 / (1 + numpy.exp(-a))
 
 
 def _make_mora_f0(

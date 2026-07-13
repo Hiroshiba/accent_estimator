@@ -17,9 +17,11 @@ from torch.utils.data import Dataset as BaseDataset
 from upath import UPath
 
 from .config import DataFileConfig, DatasetConfig
-from .data.data import InputData, OutputData, preprocess, read_bool_list
+from .data.base import read_bool_list
+from .data.data import InputData, OutputData, preprocess
 from .data.phoneme import OjtPhoneme
 from .data.sampling_data import SamplingData
+from .data.statistics import DataStatistics, StatisticsDataInput, get_or_calc_statistics
 from .data.wave import Wave
 from .utility.pathlist_utility import get_data_paths
 from .utility.upath_utility import to_local_path
@@ -211,10 +213,12 @@ class Dataset(BaseDataset[OutputData]):
     def __init__(
         self,
         datas: list[LazyInputData],
+        statistics: DataStatistics,
         config: DatasetConfig,
         is_eval: bool,
     ):
         self.datas = datas
+        self.statistics = statistics
         self.config = config
         self.is_eval = is_eval
 
@@ -231,6 +235,7 @@ class Dataset(BaseDataset[OutputData]):
                 is_eval=self.is_eval,
                 sampling_rate=self.config.sampling_rate,
                 frame_rate=self.config.frame_rate,
+                statistics=self.statistics,
             )
         except Exception as e:
             raise RuntimeError(
@@ -339,9 +344,25 @@ def get_datas(
     return datas
 
 
-def create_dataset(config: DatasetConfig) -> DatasetCollection:
+def create_dataset(
+    config: DatasetConfig, *, statistics_workers: int
+) -> tuple[DatasetCollection, DataStatistics]:
     """データセットを作成"""
     datas = get_datas(config.train, config.hdf5_cache_dir)
+    statistics = get_or_calc_statistics(
+        config,
+        [
+            StatisticsDataInput(
+                phoneme_list_path=d.phoneme_list_path,
+                accent_start_path=d.accent_start_path,
+                accent_end_path=d.accent_end_path,
+                accent_phrase_start_path=d.accent_phrase_start_path,
+                accent_phrase_end_path=d.accent_phrase_end_path,
+            )
+            for d in datas
+        ],
+        workers=statistics_workers,
+    )
 
     if config.seed is not None:
         random.Random(config.seed).shuffle(datas)
@@ -352,19 +373,24 @@ def create_dataset(config: DatasetConfig) -> DatasetCollection:
     def _wrapper(datas: list[LazyInputData], is_eval: bool) -> Dataset:
         if is_eval:
             datas = datas * config.eval_times_num
-        dataset = Dataset(datas=datas, config=config, is_eval=is_eval)
+        dataset = Dataset(
+            datas=datas, statistics=statistics, config=config, is_eval=is_eval
+        )
         return dataset
 
-    return DatasetCollection(
-        train=_wrapper(trains, is_eval=False),
-        test=_wrapper(tests, is_eval=False),
-        eval=(_wrapper(tests, is_eval=True) if config.eval_for_test else None),
-        valid=(
-            _wrapper(
-                get_datas(config.valid, config.hdf5_cache_dir)[: config.valid_num],
-                is_eval=True,
-            )
-            if config.valid is not None
-            else None
+    return (
+        DatasetCollection(
+            train=_wrapper(trains, is_eval=False),
+            test=_wrapper(tests, is_eval=False),
+            eval=(_wrapper(tests, is_eval=True) if config.eval_for_test else None),
+            valid=(
+                _wrapper(
+                    get_datas(config.valid, config.hdf5_cache_dir)[: config.valid_num],
+                    is_eval=True,
+                )
+                if config.valid is not None
+                else None
+            ),
         ),
+        statistics,
     )
