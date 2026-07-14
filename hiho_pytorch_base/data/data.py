@@ -85,9 +85,22 @@ def preprocess(
     resampled = Wave(d.wave, d.sampling_rate).resample(sampling_rate)
     frame_length = round(len(resampled) / sampling_rate * frame_rate)
 
-    assert len(d.phoneme_list) == len(d.accent_start), (
+    accent_label_lists = (
+        d.accent_start,
+        d.accent_end,
+        d.accent_phrase_start,
+        d.accent_phrase_end,
+    )
+    assert all(
+        len(d.phoneme_list) == len(accent_labels)
+        for accent_labels in accent_label_lists
+    ), (
         f"音素列とアクセント列の長さが一致しません: "
-        f"len(phoneme_list)={len(d.phoneme_list)}, len(accent_start)={len(d.accent_start)}"
+        f"len(phoneme_list)={len(d.phoneme_list)}, "
+        f"len(accent_start)={len(d.accent_start)}, "
+        f"len(accent_end)={len(d.accent_end)}, "
+        f"len(accent_phrase_start)={len(d.accent_phrase_start)}, "
+        f"len(accent_phrase_end)={len(d.accent_phrase_end)}"
     )
 
     mora_indexes = [

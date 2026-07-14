@@ -9,6 +9,7 @@ import soundfile
 from upath import UPath
 
 from hiho_pytorch_base.config import Config
+from hiho_pytorch_base.data.base import mora_phoneme_list
 from hiho_pytorch_base.data.phoneme import OjtPhoneme
 from hiho_pytorch_base.data.sampling_data import SamplingData
 from hiho_pytorch_base.utility.upath_utility import ensure_path
@@ -48,6 +49,19 @@ def _generate_phoneme_sequence(num_mora: int) -> list[OjtPhoneme]:
 
 def _phonemes_to_julius_text(phonemes: list[OjtPhoneme]) -> str:
     return "\n".join(f"{p.start:.4f} {p.end:.4f} {p.phoneme}" for p in phonemes)
+
+
+def _generate_accent_sequence(
+    phonemes: list[OjtPhoneme], probability: float
+) -> np.ndarray:
+    values = np.zeros(len(phonemes), dtype=np.int64)
+    mora_indexes = [
+        i for i, phoneme in enumerate(phonemes) if phoneme.phoneme in mora_phoneme_list
+    ]
+    values[mora_indexes] = (
+        np.random.default_rng().random(size=len(mora_indexes)) < probability
+    ).astype(np.int64)
+    return values
 
 
 def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
@@ -132,9 +146,7 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
     # アクセント核開始
     def generate_accent_start(file_path: Path) -> None:
         phonemes = phoneme_lists[file_path.stem]
-        values = (np.random.default_rng().random(size=len(phonemes)) < 0.2).astype(
-            np.int64
-        )
+        values = _generate_accent_sequence(phonemes, 0.2)
         file_path.write_text(" ".join(str(int(v)) for v in values))
 
     _setup_data(generate_accent_start, "accent_start", "txt")
@@ -142,9 +154,7 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
     # アクセント核終了
     def generate_accent_end(file_path: Path) -> None:
         phonemes = phoneme_lists[file_path.stem]
-        values = (np.random.default_rng().random(size=len(phonemes)) < 0.2).astype(
-            np.int64
-        )
+        values = _generate_accent_sequence(phonemes, 0.2)
         file_path.write_text(" ".join(str(int(v)) for v in values))
 
     _setup_data(generate_accent_end, "accent_end", "txt")
@@ -152,9 +162,7 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
     # アクセント句開始
     def generate_accent_phrase_start(file_path: Path) -> None:
         phonemes = phoneme_lists[file_path.stem]
-        values = (np.random.default_rng().random(size=len(phonemes)) < 0.1).astype(
-            np.int64
-        )
+        values = _generate_accent_sequence(phonemes, 0.1)
         file_path.write_text(" ".join(str(int(v)) for v in values))
 
     _setup_data(generate_accent_phrase_start, "accent_phrase_start", "txt")
@@ -162,9 +170,7 @@ def setup_data_and_config(base_config_path: Path, data_dir: UPath) -> Config:
     # アクセント句終了
     def generate_accent_phrase_end(file_path: Path) -> None:
         phonemes = phoneme_lists[file_path.stem]
-        values = (np.random.default_rng().random(size=len(phonemes)) < 0.1).astype(
-            np.int64
-        )
+        values = _generate_accent_sequence(phonemes, 0.1)
         file_path.write_text(" ".join(str(int(v)) for v in values))
 
     _setup_data(generate_accent_phrase_end, "accent_phrase_end", "txt")
